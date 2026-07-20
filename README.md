@@ -54,7 +54,7 @@ headers. Disable input via `doom.setPlayable(false)` for a render-only attract l
 <dependency>
     <groupId>org.vaadin.addons.enverhaase</groupId>
     <artifactId>vaadoom</artifactId>
-    <version>0.2.1</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
