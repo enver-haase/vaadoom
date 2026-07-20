@@ -7,6 +7,22 @@ cd "$(dirname "$0")"
 
 TARGET="${1:-wasm}"
 
+IMG_URL="https://raw.githubusercontent.com/adriancable/eternal/main/ioccc/vmlinux.bootimage.xz"
+RES="../src/main/resources/META-INF/resources/vaadoom"
+
+if [ "$TARGET" = "image" ]; then
+  # Fetch the upstream (adriancable/eternal) NOMMU fbdoom boot image and repack it
+  # as gzip, which the browser decompresses natively (DecompressionStream). The
+  # gz is bundled in the add-on JAR (kept out of git; run this before mvn package).
+  mkdir -p "$RES"
+  [ -f vmlinux.bootimage.xz ] || { echo ">> downloading $IMG_URL"; curl -fSL "$IMG_URL" -o vmlinux.bootimage.xz; }
+  echo ">> decompressing + repacking as gzip"
+  xz -dkf vmlinux.bootimage.xz
+  gzip -9 -c vmlinux.bootimage > "$RES/vmlinux.bootimage.gz"
+  echo ">> done: $RES/vmlinux.bootimage.gz ($(du -h "$RES/vmlinux.bootimage.gz" | cut -f1))"
+  exit 0
+fi
+
 if [ "$TARGET" = "native" ]; then
   # The original build path — proves the #ifdef seam didn't disturb it. Needs SDL3.
   CC="${CC:-cc}"
