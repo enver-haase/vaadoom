@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vaadoom — DOOM in a Vaadin component (live demo)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0b0d; color: #cfcfd4; font: 15px/1.5 system-ui, sans-serif; }
+  header { padding: 20px 16px 8px; text-align: center; }
+  h1 { margin: 0; font: 800 30px/1 Georgia, serif; color: #e33; text-shadow: 0 0 18px #700; letter-spacing: .02em; }
+  header p { margin: 8px auto 0; max-width: 720px; color: #9a9aa2; }
+  header a { color: #e77; }
+  .stage { display: flex; justify-content: center; padding: 16px; }
+  .frame { position: relative; width: min(800px, 96vw); aspect-ratio: 800 / 512; background: #000;
+           border: 1px solid #333; border-radius: 6px; overflow: hidden; outline: none; }
+  .frame:focus-visible { box-shadow: 0 0 0 2px #e33 inset; }
+  canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px;
+             align-items: center; justify-content: center; text-align: center; padding: 16px;
+             background: radial-gradient(circle at 50% 40%, #1a0000, #000 70%); }
+  .overlay[hidden] { display: none; }
+  .vtitle { font: 800 40px/1 Georgia, serif; color: #e33; text-shadow: 0 0 22px #900; }
+  .msg { color: #caa; font-family: monospace; }
+  .spin { width: 28px; height: 28px; border: 3px solid #400; border-top-color: #e33; border-radius: 50%;
+          animation: s 1s linear infinite; } @keyframes s { to { transform: rotate(360deg); } }
+  .hint { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px; text-align: center;
+          font: 12px/1.3 monospace; color: #eee; background: linear-gradient(transparent, rgba(0,0,0,.8));
+          pointer-events: none; } .hint[hidden] { display: none; } .hint b { color: #e77; }
+  footer { text-align: center; color: #77787f; padding: 10px 16px 28px; font-size: 13px; }
+  footer a { color: #99a; }
+</style>
+</head>
+<body>
+<header>
+  <h1>VAADOOM</h1>
+  <p>DOOM running in WebAssembly — a NOMMU Linux on Adrian Cable's single-instruction SUBLEQ VM.
+     This is a <b>standalone demo of the client engine</b>; the
+     <a href="https://vaadin.com/directory/component/vaadoom">Vaadin&nbsp;Directory add-on</a>
+     wraps this exact engine as a server-side Flow component.
+     Click the frame and play. First paint takes ~15&nbsp;seconds (it boots Linux, then launches DOOM).</p>
+</header>
+
+<div class="stage">
+  <div class="frame" id="frame" tabindex="0">
+    <canvas id="cv" width="800" height="512"></canvas>
+    <div class="overlay" id="overlay">
+      <div class="vtitle">VAADOOM</div>
+      <div class="spin" id="spin"></div>
+      <div class="msg" id="msg">click to start</div>
+    </div>
+    <div class="hint" id="hint" hidden>
+      <b>arrows</b> move · <b>Ctrl</b> fire · <b>Space</b> use · <b>Alt</b> strafe · <b>1–7</b> weapons · <b>Esc</b> menu
+    </div>
+  </div>
+</div>
+
+<footer>
+  100% client-side · no server, no <code>SharedArrayBuffer</code>, no COOP/COEP ·
+  <a href="https://github.com/enver-haase/vaadoom">source on GitHub</a> ·
+  DOOM © id Software (shareware) · MIT-licensed engine (derived from
+  <a href="https://github.com/adriancable/eternal">eternal</a>)
+</footer>
+
+<script type="module">
+  const frame = document.getElementById('frame');
+  const cv = document.getElementById('cv');
+  const overlay = document.getElementById('overlay');
+  const msg = document.getElementById('msg');
+  const spin = document.getElementById('spin');
+  const hint = document.getElementById('hint');
+
+  // KeyboardEvent.code -> USB HID usage id (== SDL scancode) understood by the VM.
+  const KEYMAP = (() => {
+    const m = { ArrowRight:79, ArrowLeft:80, ArrowDown:81, ArrowUp:82, ControlLeft:224, ControlRight:228,
+      AltLeft:226, AltRight:230, ShiftLeft:225, ShiftRight:229, Space:44, Enter:40, Escape:41, Tab:43,
+      Backspace:42, Minus:45, Equal:46, Comma:54, Period:55, Slash:56, Backquote:53 };
+    for (let i=0;i<26;i++) m['Key'+String.fromCharCode(65+i)] = 4+i;
+    m.Digit0 = 39; for (let i=1;i<=9;i++) m['Digit'+i] = 29+i;
+    for (let i=1;i<=12;i++) m['F'+i] = 57+i;
+    return m;
+  })();
+  const SWALLOW = new Set(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab',
+    'ControlLeft','ControlRight','AltLeft','AltRight', ...Array.from({length:12},(_,i)=>'F'+(i+1))]);
+
+  let worker = null, started = false;
+  const down = new Set();
+
+  function start() {
+    if (started) return; started = true;
+    msg.textContent = 'loading engine…';
+    const off = cv.transferControlToOffscreen();
+    worker = new Worker(new URL('./vaadoom-worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'status') {
+        msg.textContent = ({ 'loading-engine':'loading engine…', 'loading-image':'loading Linux + DOOM…',
+          'booting':'booting Eternal Linux…', 'running':'running', 'halted':'engine halted' })[m.phase] || m.phase;
+        if (m.phase === 'running') { overlay.hidden = true; hint.hidden = false; frame.focus(); }
+      } else if (m.type === 'error') { spin.style.display='none'; msg.textContent = '⚠ ' + m.message; }
+    };
+    worker.onerror = (e) => { spin.style.display='none'; msg.textContent = '⚠ ' + (e.message||e.type); };
+    worker.postMessage({ type:'start', canvas: off }, [off]);
+  }
+
+  frame.addEventListener('pointerdown', () => { start(); frame.focus(); });
+  frame.addEventListener('keydown', (e) => {
+    const hid = KEYMAP[e.code]; if (!hid) return;
+    if (SWALLOW.has(e.code)) e.preventDefault();
+    if (down.has(e.code)) return; down.add(e.code);
+    worker?.postMessage({ type:'key', code: hid });
+  });
+  frame.addEventListener('keyup', (e) => {
+    const hid = KEYMAP[e.code]; if (!hid) return;
+    if (SWALLOW.has(e.code)) e.preventDefault();
+    down.delete(e.code);
+    worker?.postMessage({ type:'key', code: -hid });
+  });
+  frame.addEventListener('blur', () => { for (const c of down) { const h=KEYMAP[c]; if(h) worker?.postMessage({type:'key',code:-h}); } down.clear(); });
+</script>
+</body>
+</html>
