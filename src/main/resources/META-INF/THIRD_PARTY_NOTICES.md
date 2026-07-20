@@ -27,10 +27,15 @@ below.
 
 ## 1. cable / Eternal — the SUBLEQ VM (MIT)
 
-`native/vm.c` (and the WebAssembly built from it) is a de-obfuscated,
-MMU-extended derivative of Adrian Cable's IOCCC 2025 entry **cable** and the
-**eternal** project, <https://github.com/adriancable/eternal>, via
-<https://github.com/enver-haase/lunatix>.
+Two VM sources derive from Adrian Cable's IOCCC 2025 entry **cable** and the
+**eternal** project, <https://github.com/adriancable/eternal>:
+
+* `native/vm_nommu.c` — the **shipped WebAssembly engine** — is derived directly
+  from eternal's minimal `vm/vm.c` (the fast NOMMU VM used by the bundled image).
+* `native/vm.c` — an MMU-extended, de-obfuscated derivative (via
+  <https://github.com/enver-haase/lunatix>), kept for the future MMU-DOOM path.
+
+Both are used under the MIT License below.
 
 ```
 MIT License

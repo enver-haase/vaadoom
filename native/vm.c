@@ -194,7 +194,19 @@ static inline int32_t walk_pt(int32_t base, int32_t wi, access_t access) {
     return (int32_t)pa;
 }
 
+/* Hot-path shortcut: true when translation is pure identity + bounds check, i.e.
+ * supervisor mode with no kernel vmalloc window (cable/NOMMU is always here). Kept
+ * in sync by refresh_xlat() at the few mode/kptb transition points. */
+static bool xlat_fast;
+static inline void refresh_xlat(void) {
+    xlat_fast = (cpu.mode == MODE_SUPER) && (cpu.kptb == 0);
+}
+
 static inline int32_t translate(int32_t wi, access_t access) {
+    if (__builtin_expect(xlat_fast, 1)) {          /* supervisor identity: just bounds-check */
+        if (__builtin_expect((uint32_t)wi < (uint32_t)MEM_WORDS, 1)) return wi;
+        page_fault(wi, access); return 0;
+    }
     if (cpu.mode == MODE_SUPER) {
         /* Real-world kernel-space paging (Option B): the direct-mapped physical region
          * is identity, but a high vmalloc window is translated through CR_KPTB when the
@@ -272,9 +284,9 @@ static step_result_t cr_write(int32_t idx, int32_t val) {
         case CR_FAULT_ADDR: cpu.fault_addr = val; break;
         case CR_PTB:        cpu.ptb = val; break;
         case CR_FAULT_ACC:  cpu.fault_access = val; break;
-        case CR_KPTB:       cpu.kptb = val; break;
+        case CR_KPTB:       cpu.kptb = val; refresh_xlat(); break;
         case CR_SYSGATE:    cpu.sysgate = val; break;
-        case CR_RTE:        cpu.mode = MODE_USER; pc = cpu.saved_pc; break;
+        case CR_RTE:        cpu.mode = MODE_USER; pc = cpu.saved_pc; refresh_xlat(); break;
     }
     return STEP_CONT;
 }
@@ -297,9 +309,11 @@ static inline int32_t operand(void) {
     int32_t slot = pc++;
     int32_t w    = phys_read(slot, ACCESS_EXEC);
     if (fault_pending) return 0;
-    int32_t cell = (w & 1) ? (w / 4) : slot;
-    int32_t v    = phys_read(cell, ACCESS_READ);
-    return v / 4;
+    if (w & 1) {                          /* indirect: dereference the pointer */
+        int32_t v = phys_read(w / 4, ACCESS_READ);
+        return v / 4;
+    }
+    return w / 4;                         /* direct: value == w, skip the redundant re-read */
 }
 
 /* --------------------------------------------------------------------- devices */
@@ -308,6 +322,7 @@ static void fb_present(void) {
 #ifdef __EMSCRIPTEN__
     em_fb_present((const uint8_t *)&M[M[REG_FB_OFFSET]], FB_BYTES);
 #else
+    if (!surface) return;                   /* headless (e.g. --bench): no SDL surface */
     memcpy(surface->pixels, &M[M[REG_FB_OFFSET]], FB_BYTES);
     SDL_UpdateWindowSurface(window);
 #ifdef CAPTURE
@@ -323,6 +338,7 @@ static void kbd_poll_into(int32_t dst) {    /* supervisor-only; dst is physical 
     int32_t code = em_kbd_poll();
     if (code) M[dst] = code;
 #else
+    if (!surface) return;                   /* headless (e.g. --bench): SDL not initialised */
     int32_t V[32];
     if (SDL_PollEvent((SDL_Event *)V))
         M[dst] = V[6] * (1537 - 2 * V[0]);
@@ -393,6 +409,7 @@ static step_result_t step(void) {
 static uint64_t run(uint64_t max_steps) {
     uint64_t n = 0;
     uint32_t q = 0;                         /* steps this user quantum */
+    refresh_xlat();                         /* sync fast-path flag with the caller's mode */
     for (;; n++) {
         if (max_steps && n >= max_steps) break;
         int32_t start_pc = pc;              /* for restart on fault */
@@ -403,6 +420,7 @@ static uint64_t run(uint64_t max_steps) {
             pc            = start_pc;
             cpu.saved_pc  = start_pc;
             cpu.mode      = MODE_SUPER;
+            refresh_xlat();
             fprintf(stderr,
                     "[trap] cause=%d faulting vaddr=%d (word) at user pc=%d -> vector %d\n",
                     cpu.cause, cpu.fault_addr, start_pc, cpu.vector);
@@ -416,6 +434,7 @@ static uint64_t run(uint64_t max_steps) {
             cpu.saved_pc = pc;              /* resume at the NEXT instruction (not a restart) */
             cpu.cause    = CAUSE_TIMER;
             cpu.mode     = MODE_SUPER;
+            refresh_xlat();
             pc           = cpu.vector;      /* preempt -> scheduler */
         }
     }
@@ -610,6 +629,7 @@ static int paging_selftest(void) {
     cpu.ptb = PTB; cpu.base = 0; cpu.limit = 0;
     cpu.mode = MODE_USER; pc = USER_VA_MIN;
     cpu.cause = FAULT_NONE; cpu.fault_addr = -1;
+    refresh_xlat();                          /* this scenario drives step() directly */
 
     int demand = 0, perm = 0, killed = 0;
     for (int guard = 0; guard < 1000; guard++) {
@@ -832,6 +852,22 @@ int main(int argc, char **argv) {
         return selftest();
     if (argc > 1 && strcmp(argv[1], "--demo") == 0)
         return demo_twotask();
+
+    /* Headless benchmark: `--bench [steps]` loads the image and runs a bounded
+     * number of steps, printing the achieved rate. Same on native and wasm. */
+    if (argc > 1 && strcmp(argv[1], "--bench") == 0) {
+        uint64_t cap = (argc > 2) ? strtoull(argv[2], NULL, 10) : 1000000000ULL;
+        load_image();
+        struct timespec t0, t1;
+        timespec_get(&t0, TIME_UTC);
+        uint64_t did = run(cap);
+        timespec_get(&t1, TIME_UTC);
+        double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        fprintf(stderr, "bench: %llu steps in %.3fs = %.1f Msteps/s%s\n",
+                (unsigned long long) did, secs, did / secs / 1e6,
+                did < cap ? " (HALTED early)" : "");
+        return 0;
+    }
 
     load_image();
 

@@ -45,8 +45,8 @@ headers. Disable input via `doom.setPlayable(false)` for a render-only attract l
 - Vaadin **25.2+**, Java **21+**
 - A browser with `OffscreenCanvas`, `WebAssembly` and `DecompressionStream` (current
   Chrome/Edge/Firefox/Safari)
-- First paint of DOOM takes a few tens of seconds (boot + launch) behind a loading
-  overlay; the engine uses up to ~1.5 GB of WebAssembly memory.
+- First paint of DOOM takes ~15 seconds (boot + launch) behind a loading overlay;
+  the engine uses up to ~1.5 GB of WebAssembly memory.
 
 ## Usage
 

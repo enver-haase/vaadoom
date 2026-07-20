@@ -20,7 +20,7 @@ public class DemoView extends VerticalLayout {
         add(new Paragraph(
                 "The viewport below is the Vaadoom Flow component. It boots a NOMMU Linux on a "
                         + "SUBLEQ VM compiled to WebAssembly and runs the DOOM attract demo "
-                        + "(first paint takes a few tens of seconds)."));
+                        + "(first paint takes ~15 seconds)."));
 
         Vaadoom doom = new Vaadoom();
         add(doom);

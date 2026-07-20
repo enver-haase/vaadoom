@@ -29,3 +29,4 @@ src/main/resources/META-INF/resources/vaadoom/vmlinux.bootimage.gz
 
 # dev-demo webapp root (symlink to engine assets for jetty:run)
 src/main/webapp/
+native/vmnommu

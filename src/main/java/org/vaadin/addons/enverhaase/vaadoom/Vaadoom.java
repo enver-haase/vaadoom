@@ -17,8 +17,8 @@ import com.vaadin.flow.component.dependency.JsModule;
  * component is sized to those pixels; use {@link #setWidth(String)} /
  * {@link #setHeight(String)} (from {@link HasSize}) to scale the viewport.
  *
- * <p>The engine boots a NOMMU Linux and auto-launches fbdoom; first paint takes a few
- * tens of seconds (a loading overlay is shown meanwhile). It is <b>playable</b>: when the
+ * <p>The engine boots a NOMMU Linux and auto-launches fbdoom; first paint takes ~15
+ * seconds (a loading overlay is shown meanwhile). It is <b>playable</b>: when the
  * component has focus it forwards keyboard input to DOOM (arrows move, Ctrl fires, Space
  * uses, Alt strafes, 1&ndash;7 select weapons). Disable input with {@link #setPlayable(boolean)}.
  * Needs a browser with {@code OffscreenCanvas}, {@code WebAssembly} and

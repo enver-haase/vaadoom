@@ -23,14 +23,20 @@ if [ "$TARGET" = "image" ]; then
   exit 0
 fi
 
-if [ "$TARGET" = "native" ]; then
-  # The original build path — proves the #ifdef seam didn't disturb it. Needs SDL3.
+# Which VM source to build. The shipped NOMMU engine is vm_nommu.c (fast, no MMU);
+# vm.c is the MMU-capable engine kept for the future MMU-DOOM path and selftest.
+NATIVE_SRC="${NATIVE_SRC:-vm.c}"          # native/native-nommu pick this
+WASM_SRC="${WASM_SRC:-vm_nommu.c}"        # shipped wasm engine
+
+if [ "$TARGET" = "native" ] || [ "$TARGET" = "native-nommu" ]; then
   CC="${CC:-cc}"
-  echo ">> native SDL3 build -> ./lunavm"
+  SRC="$NATIVE_SRC"; OUTBIN=lunavm
+  [ "$TARGET" = "native-nommu" ] && { SRC=vm_nommu.c; OUTBIN=vmnommu; }
+  echo ">> native SDL3 build ($SRC) -> ./$OUTBIN"
   # shellcheck disable=SC2046
   $CC -std=gnu17 -O3 -fwrapv -DSDL_MAIN_HANDLED $(pkg-config sdl3 --cflags) \
-      vm.c -o lunavm $(pkg-config sdl3 --libs)
-  echo ">> done: ./native/lunavm   (run: ./lunavm < image.bootimage)"
+      "$SRC" -o "$OUTBIN" $(pkg-config sdl3 --libs)
+  echo ">> done: ./native/$OUTBIN   (run: ./$OUTBIN < image.bootimage)"
   exit 0
 fi
 
@@ -42,8 +48,8 @@ source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1 || true
 OUT="../src/main/resources/META-INF/resources/vaadoom"
 mkdir -p "$OUT"
 
-echo ">> wasm build -> $OUT/vaadoom.{js,wasm}"
-emcc -O3 -fwrapv vm.c -o "$OUT/vaadoom.js" \
+echo ">> wasm build ($WASM_SRC) -> $OUT/vaadoom.{js,wasm}"
+emcc -O3 -fwrapv "$WASM_SRC" -o "$OUT/vaadoom.js" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker,node \
   -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
