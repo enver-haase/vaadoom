@@ -51,7 +51,7 @@ consuming app needs **no** `COOP`/`COEP` cross-origin-isolation headers.
 <dependency>
     <groupId>org.vaadin.addons.enverhaase</groupId>
     <artifactId>vaadoom</artifactId>
-    <version>0.2.0</version>
+    <version>0.2.1</version>
 </dependency>
 ```
 
@@ -78,6 +78,10 @@ same source builds both the browser engine and the original native SDL3 binary.
 
 ## Credits & license
 
-MIT licensed. The SUBLEQ VM is derived from Adrian Cable's IOCCC 2025 *cable* entry and
-the [`eternal`](https://github.com/adriancable/eternal) project (MIT). DOOM is **fbdoom**
-with the id Software shareware `doom1.wad`. See [LICENSE](LICENSE).
+Vaadoom's own code is **MIT** licensed ([LICENSE](LICENSE)). The SUBLEQ VM is derived
+from Adrian Cable's IOCCC 2025 *cable* entry and the
+[`eternal`](https://github.com/adriancable/eternal) project (MIT). The bundled boot image
+redistributes the DOOM/**fbdoom** engine and id Software's shareware `doom1.wad`
+(© id Software), plus the Linux kernel and BusyBox (GPLv2) and uClibc-ng (LGPLv2.1).
+Full notices, license texts and the corresponding-source offer are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). DOOM is a trademark of id Software LLC.

@@ -7,7 +7,7 @@
     <groupId>org.vaadin.addons.enverhaase</groupId>
     <artifactId>vaadoom</artifactId>
     <name>Vaadoom</name>
-    <version>0.2.0</version>
+    <version>0.2.1</version>
     <packaging>jar</packaging>
     <description>Runs DOOM (on a NOMMU Linux atop a SUBLEQ VM, compiled to WebAssembly) inside a Vaadin Flow component.</description>
 

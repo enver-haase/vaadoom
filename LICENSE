@@ -2,10 +2,19 @@ MIT License
 
 Copyright (c) 2026 Enver Haase
 
-The bundled SUBLEQ virtual machine (native/vm.c and its WebAssembly build) is
-derived from Adrian Cable's IOCCC 2025 "cable" subleq VM and the accompanying
-"eternal" project (https://github.com/adriancable/eternal), used under the MIT
-License. Portions Copyright (c) Adrian Cable.
+This MIT License covers Vaadoom's own code. The bundled SUBLEQ virtual machine
+(native/vm.c and its WebAssembly build) is derived from Adrian Cable's IOCCC 2025
+"cable" subleq VM and the "eternal" project (https://github.com/adriancable/eternal),
+used under the MIT License; portions Copyright (c) Adrian Cable / Eternal Software
+Initiative.
+
+The add-on also bundles a boot image (vmlinux.bootimage.gz) that redistributes
+third-party software under their own licenses — the DOOM/fbdoom engine and the
+DOOM shareware doom1.wad (id Software), the Linux kernel and BusyBox (GPLv2), and
+uClibc-ng (LGPLv2.1). See THIRD_PARTY_NOTICES.md for the full notices, license
+texts (also under META-INF/licenses/) and the written offer of corresponding
+source. Those licenses apply to the respective bundled works, not to Vaadoom's
+own MIT-licensed code.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
