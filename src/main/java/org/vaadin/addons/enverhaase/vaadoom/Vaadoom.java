@@ -17,9 +17,10 @@ import com.vaadin.flow.component.dependency.JsModule;
  * component is sized to those pixels; use {@link #setWidth(String)} /
  * {@link #setHeight(String)} (from {@link HasSize}) to scale the viewport.
  *
- * <p><b>Note:</b> this 0.1.0 release ships a placeholder renderer (an animated test
- * pattern) so the Directory packaging and Flow integration can be verified before the
- * WebAssembly DOOM engine is wired in.
+ * <p>The engine boots a NOMMU Linux and auto-launches fbdoom; first paint takes a few
+ * tens of seconds (a loading overlay is shown meanwhile). It is render-only (the DOOM
+ * attract/demo loop) and needs a browser with {@code OffscreenCanvas}, {@code WebAssembly}
+ * and {@code DecompressionStream}. No cross-origin-isolation headers are required.
  */
 @Tag("vaadoom-viewport")
 @JsModule("./vaadoom-viewport.js")

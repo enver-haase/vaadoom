@@ -18,8 +18,9 @@ public class DemoView extends VerticalLayout {
 
         add(new H1("Vaadoom demo"));
         add(new Paragraph(
-                "The viewport below is the Vaadoom Flow component. In 0.1.0 it renders a "
-                        + "placeholder test pattern; the WebAssembly SUBLEQ/DOOM engine is wired in later."));
+                "The viewport below is the Vaadoom Flow component. It boots a NOMMU Linux on a "
+                        + "SUBLEQ VM compiled to WebAssembly and runs the DOOM attract demo "
+                        + "(first paint takes a few tens of seconds)."));
 
         Vaadoom doom = new Vaadoom();
         add(doom);

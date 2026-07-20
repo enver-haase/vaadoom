@@ -7,7 +7,7 @@
     <groupId>org.vaadin.addons.enverhaase</groupId>
     <artifactId>vaadoom</artifactId>
     <name>Vaadoom</name>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
     <packaging>jar</packaging>
     <description>Runs DOOM (on a NOMMU Linux atop a SUBLEQ VM, compiled to WebAssembly) inside a Vaadin Flow component.</description>
 
@@ -149,6 +149,12 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-source-plugin</artifactId>
                         <version>3.3.1</version>
+                        <configuration>
+                            <!-- Keep the 38MB bundled boot image out of the sources jar -->
+                            <excludes>
+                                <exclude>**/vmlinux.bootimage.gz</exclude>
+                            </excludes>
+                        </configuration>
                         <executions>
                             <execution>
                                 <id>attach-sources</id>
