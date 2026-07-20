@@ -42,14 +42,20 @@ class VaadoomViewport extends LitElement {
     for (let i = 0; i < 26; i++) m['Key' + String.fromCharCode(65 + i)] = 4 + i; // KeyA..KeyZ
     m.Digit0 = 39;
     for (let i = 1; i <= 9; i++) m['Digit' + i] = 29 + i;                        // Digit1..9 -> 30..38
+    for (let i = 1; i <= 12; i++) m['F' + i] = 57 + i;                           // F1..F12 -> HID 58..69
     return m;
   })();
 
-  // Keys we swallow so the browser doesn't scroll / change focus during play.
-  static SWALLOW = new Set([
-    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
-    'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight',
-  ]);
+  // Keys we swallow so the browser doesn't scroll / reload / go fullscreen /
+  // open devtools while the game has focus.
+  static SWALLOW = (() => {
+    const s = new Set([
+      'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab',
+      'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight',
+    ]);
+    for (let i = 1; i <= 12; i++) s.add('F' + i);                                // F1..F12 are DOOM functions
+    return s;
+  })();
 
   static get styles() {
     return css`
