@@ -19,3 +19,7 @@ src/main/bundles/
 native/vmlinux.bootimage
 native/vmlinux.bootimage.xz
 native/emsdk/
+
+# native build artifacts
+native/lunavm
+native/lunavm-capture
