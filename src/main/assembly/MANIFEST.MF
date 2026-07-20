@@ -1,0 +1,8 @@
+Manifest-Version: 1.0
+Vaadin-Package-Version: 1
+Vaadin-Addon: ${project.build.finalName}.${project.packaging}
+Vaadin-Addon-Name: Vaadoom
+Vaadin-Addon-License: MIT
+Implementation-Title: ${project.name}
+Implementation-Version: ${project.version}
+Implementation-Vendor: ${organization.name}

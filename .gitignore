@@ -1,0 +1,21 @@
+target/
+node_modules/
+package*.json
+pnpm-lock.yaml
+vite.generated.ts
+tsconfig.json
+types.d.ts
+.vaadin/
+src/main/frontend/generated/
+src/main/frontend/index.html
+src/main/bundles/
+.playwright-mcp/
+*.iml
+.idea/
+.DS_Store
+.claude/settings.local.json
+
+# Large build inputs fetched/generated for the WASM engine (Stage 2/3)
+native/vmlinux.bootimage
+native/vmlinux.bootimage.xz
+native/emsdk/
