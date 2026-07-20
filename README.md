@@ -29,8 +29,11 @@ Web Worker ── vaadoom.js + vaadoom.wasm   (the SUBLEQ VM)
    • run the VM in bounded slices; paint each frame to the OffscreenCanvas
 ```
 
-Render-only (the DOOM attract/demo loop). It does **not** use `SharedArrayBuffer`, so the
-consuming app needs **no** `COOP`/`COEP` cross-origin-isolation headers.
+**Playable.** When the component has focus it forwards keyboard input to DOOM —
+**arrows** move, **Ctrl** fires, **Space** uses/opens, **Alt** strafes, **1–7** pick weapons,
+**Esc** opens the menu. Input is delivered between VM slices, so it uses **no**
+`SharedArrayBuffer` and the consuming app needs **no** `COOP`/`COEP` cross-origin-isolation
+headers. Disable input via `doom.setPlayable(false)` for a render-only attract loop.
 
 <p float="left">
   <img src="docs/img/eternal-linux-boot.png" width="380" alt="Eternal Linux booting"/>

@@ -18,9 +18,12 @@ import com.vaadin.flow.component.dependency.JsModule;
  * {@link #setHeight(String)} (from {@link HasSize}) to scale the viewport.
  *
  * <p>The engine boots a NOMMU Linux and auto-launches fbdoom; first paint takes a few
- * tens of seconds (a loading overlay is shown meanwhile). It is render-only (the DOOM
- * attract/demo loop) and needs a browser with {@code OffscreenCanvas}, {@code WebAssembly}
- * and {@code DecompressionStream}. No cross-origin-isolation headers are required.
+ * tens of seconds (a loading overlay is shown meanwhile). It is <b>playable</b>: when the
+ * component has focus it forwards keyboard input to DOOM (arrows move, Ctrl fires, Space
+ * uses, Alt strafes, 1&ndash;7 select weapons). Disable input with {@link #setPlayable(boolean)}.
+ * Needs a browser with {@code OffscreenCanvas}, {@code WebAssembly} and
+ * {@code DecompressionStream}; <b>no</b> cross-origin-isolation (COOP/COEP) headers are
+ * required (input is delivered between VM slices, without SharedArrayBuffer).
  */
 @Tag("vaadoom-viewport")
 @JsModule("./vaadoom-viewport.js")
@@ -56,5 +59,23 @@ public class Vaadoom extends Component implements HasSize {
      */
     public boolean isAutostart() {
         return getElement().getProperty("autostart", true);
+    }
+
+    /**
+     * Whether keyboard input is enabled (the viewport becomes focusable and
+     * forwards key events to DOOM). Defaults to {@code true}. Input works without
+     * any cross-origin-isolation headers.
+     *
+     * @param playable {@code true} to enable keyboard control
+     */
+    public void setPlayable(boolean playable) {
+        getElement().setProperty("playable", playable);
+    }
+
+    /**
+     * @return whether keyboard input is enabled
+     */
+    public boolean isPlayable() {
+        return getElement().getProperty("playable", true);
     }
 }
