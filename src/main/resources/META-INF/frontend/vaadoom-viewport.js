@@ -1,135 +1,133 @@
 import { LitElement, html, css } from 'lit';
 
 /**
- * <vaadoom-viewport> — Vaadoom DOOM viewport.
+ * <vaadoom-viewport> — the Vaadoom DOOM viewport.
  *
- * 0.1.0 PLACEHOLDER: draws an animated test pattern at the native DOOM
- * framebuffer resolution (800x512) so the Flow component, packaging and
- * Directory publishing pipeline can be verified before the WebAssembly
- * SUBLEQ/DOOM engine is wired in (Stage 4).
+ * Boots the bundled NOMMU-Linux + SUBLEQ-VM WebAssembly engine in a Web Worker,
+ * which auto-launches fbdoom and paints its 800x512 framebuffer onto an
+ * OffscreenCanvas transferred to that worker. Render-only (attract/demo loop);
+ * no SharedArrayBuffer, so no cross-origin-isolation headers are required.
+ *
+ * The engine assets (vaadoom.js / vaadoom.wasm / vmlinux.bootimage.gz /
+ * vaadoom-worker.js) are served raw from META-INF/resources/vaadoom/, i.e. at
+ * `<context>/vaadoom/...`, resolved here against document.baseURI.
  */
 class VaadoomViewport extends LitElement {
   static get properties() {
     return {
       autostart: { type: Boolean },
+      _phase: { state: true },
+      _error: { state: true },
     };
   }
 
-  static get styles() {
-    return css`
-      :host {
-        display: block;
-        position: relative;
-        background: #000;
-        overflow: hidden;
-      }
-      canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-        image-rendering: pixelated;
-      }
-      .badge {
-        position: absolute;
-        left: 8px;
-        bottom: 6px;
-        font: 11px/1.2 monospace;
-        color: #9c9;
-        opacity: 0.7;
-        pointer-events: none;
-        user-select: none;
-      }
-    `;
-  }
-
-  // DOOM native framebuffer size (matches Vaadoom.FB_WIDTH/FB_HEIGHT).
   static FB_W = 800;
   static FB_H = 512;
+
+  static get styles() {
+    return css`
+      :host { display: block; position: relative; background: #000; overflow: hidden; }
+      canvas {
+        display: block; width: 100%; height: 100%;
+        image-rendering: pixelated; image-rendering: crisp-edges;
+      }
+      .overlay {
+        position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 14px;
+        color: #d33; font: 600 15px/1.4 monospace; letter-spacing: .05em;
+        background: radial-gradient(circle at 50% 40%, #1a0000 0%, #000 70%);
+        text-align: center; padding: 16px;
+      }
+      .overlay[hidden] { display: none; }
+      .title { color: #e33; font-size: 34px; font-weight: 800;
+        text-shadow: 0 0 18px #900; font-family: Georgia, serif; }
+      .msg { color: #caa; font-weight: 400; }
+      .spin { width: 26px; height: 26px; border: 3px solid #400;
+        border-top-color: #e33; border-radius: 50%; animation: s 1s linear infinite; }
+      @keyframes s { to { transform: rotate(360deg); } }
+      .err { color: #f66; max-width: 90%; white-space: pre-wrap; font-weight: 400; }
+    `;
+  }
 
   constructor() {
     super();
     this.autostart = true;
-    this._raf = 0;
-    this._t = 0;
+    this._phase = 'idle';
+    this._error = null;
+    this._worker = null;
+    this._started = false;
   }
 
   render() {
+    const running = this._phase === 'running' && !this._error;
     return html`
-      <canvas
-        width="${VaadoomViewport.FB_W}"
-        height="${VaadoomViewport.FB_H}"
-      ></canvas>
-      <span class="badge">vaadoom 0.1.0 · placeholder</span>
+      <canvas width="${VaadoomViewport.FB_W}" height="${VaadoomViewport.FB_H}"></canvas>
+      <div class="overlay" ?hidden=${running}>
+        <div class="title">VAADOOM</div>
+        ${this._error
+          ? html`<div class="err">⚠ ${this._error}</div>`
+          : html`<div class="spin"></div><div class="msg">${this._phaseLabel()}</div>`}
+      </div>
     `;
   }
 
-  firstUpdated() {
-    this._canvas = this.renderRoot.querySelector('canvas');
-    this._ctx = this._canvas.getContext('2d');
-    if (this.autostart) {
-      this.start();
-    } else {
-      this._drawFrame(0); // draw one static frame
+  _phaseLabel() {
+    switch (this._phase) {
+      case 'idle': return 'ready';
+      case 'loading-engine': return 'loading engine…';
+      case 'loading-image': return 'loading Linux + DOOM image…';
+      case 'booting': return 'booting Eternal Linux…';
+      case 'running': return 'running';
+      case 'halted': return 'engine halted';
+      default: return this._phase;
     }
+  }
+
+  firstUpdated() {
+    if (this.autostart) this.start();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.stop();
+    if (this._worker) { this._worker.terminate(); this._worker = null; }
   }
 
+  /** Boots the engine. Safe to call once; ignored if already started. */
   start() {
-    if (this._raf) return;
-    const loop = () => {
-      this._t += 1;
-      this._drawFrame(this._t);
-      this._raf = requestAnimationFrame(loop);
+    if (this._started) return;
+    this._started = true;
+    this._error = null;
+    this._phase = 'loading-engine';
+
+    const canvas = this.renderRoot.querySelector('canvas');
+    let offscreen;
+    try {
+      offscreen = canvas.transferControlToOffscreen();
+    } catch (e) {
+      this._error = 'OffscreenCanvas not supported by this browser.';
+      return;
+    }
+
+    const workerUrl = new URL('vaadoom/vaadoom-worker.js', document.baseURI);
+    let worker;
+    try {
+      worker = new Worker(workerUrl, { type: 'module' });
+    } catch (e) {
+      this._error = 'Could not start engine worker: ' + e;
+      return;
+    }
+    this._worker = worker;
+
+    worker.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.type === 'status') this._phase = m.phase;
+      else if (m.type === 'error') this._error = m.message;
     };
-    this._raf = requestAnimationFrame(loop);
-  }
+    worker.onerror = (ev) => {
+      this._error = 'Engine worker error: ' + (ev.message || ev.type);
+    };
 
-  stop() {
-    if (this._raf) {
-      cancelAnimationFrame(this._raf);
-      this._raf = 0;
-    }
-  }
-
-  _drawFrame(t) {
-    const ctx = this._ctx;
-    if (!ctx) return;
-    const w = VaadoomViewport.FB_W;
-    const h = VaadoomViewport.FB_H;
-
-    // Animated plasma-ish background as a stand-in for the DOOM framebuffer.
-    const g = ctx.createLinearGradient(0, 0, w, h);
-    const p = (t % 360) / 360;
-    g.addColorStop(0, `hsl(${(p * 360) | 0}, 60%, 12%)`);
-    g.addColorStop(0.5, `hsl(${((p * 360) + 40) % 360 | 0}, 70%, 22%)`);
-    g.addColorStop(1, `hsl(${((p * 360) + 80) % 360 | 0}, 60%, 10%)`);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, w, h);
-
-    // Scanlines for a CRT-ish feel.
-    ctx.fillStyle = 'rgba(0,0,0,0.18)';
-    for (let y = 0; y < h; y += 3) {
-      ctx.fillRect(0, y, w, 1);
-    }
-
-    // Title.
-    ctx.save();
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#e33';
-    ctx.font = 'bold 96px Georgia, serif';
-    ctx.shadowColor = '#600';
-    ctx.shadowBlur = 24;
-    ctx.fillText('VAADOOM', w / 2, h / 2 - 20);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#cbb';
-    ctx.font = '20px monospace';
-    ctx.fillText('SUBLEQ + WASM viewport — engine wiring in progress', w / 2, h / 2 + 60);
-    ctx.restore();
+    worker.postMessage({ type: 'start', canvas: offscreen }, [offscreen]);
   }
 }
 

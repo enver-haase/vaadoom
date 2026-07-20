@@ -129,6 +129,11 @@
                     <supportedPackagings>
                         <supportedPackaging>jar</supportedPackaging>
                     </supportedPackagings>
+                    <!-- Dev-demo only: Jetty serves src/main/webapp as the web root, where a
+                         symlink exposes the add-on's raw engine assets at /vaadoom/* so
+                         Vaadin's static handler resolves them. In a real consumer the add-on
+                         is a JAR and the Servlet 3.0 META-INF/resources rule serves them. -->
+                    <webAppSourceDirectory>${project.basedir}/src/main/webapp</webAppSourceDirectory>
                 </configuration>
             </plugin>
         </plugins>
