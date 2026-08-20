@@ -34,11 +34,16 @@
 <body>
 <header>
   <h1>VAADOOM</h1>
-  <p>DOOM running in WebAssembly — a NOMMU Linux on Adrian Cable's single-instruction SUBLEQ VM.
-     This is a <b>standalone demo of the client engine</b>; the
+  <p>DOOM running in WebAssembly — a NOMMU Linux on Adrian Cable's single-instruction SUBLEQ VM,
+     <b>with sound</b>. This is a <b>standalone demo of the client engine</b>; the
      <a href="https://vaadin.com/directory/component/vaadoom">Vaadin&nbsp;Directory add-on</a>
      wraps this exact engine as a server-side Flow component.
-     Click the frame and play. First paint takes ~15&nbsp;seconds (it boots Linux, then launches DOOM).</p>
+     Click the frame and play. First paint takes ~15&nbsp;seconds (it boots Linux, fetches the WAD
+     and launches DOOM).</p>
+  <p>The game data is a <b>WAD fetched over the network</b> — here id Software's freely
+     redistributable shareware episode, from the Internet&nbsp;Archive. The Flow component takes
+     that URL as its constructor argument, so an IWAD you own and host yourself
+     (<code>doom.wad</code>, <code>doomu.wad</code>, <code>doom2.wad</code>) plays the full game.</p>
 </header>
 
 <div class="stage">
@@ -59,7 +64,8 @@
   100% client-side · no server, no <code>SharedArrayBuffer</code>, no COOP/COEP ·
   <a href="https://github.com/enver-haase/vaadoom">source on GitHub</a> ·
   DOOM © id Software (shareware) · MIT-licensed engine (derived from
-  <a href="https://github.com/adriancable/eternal">eternal</a>)
+  <a href="https://github.com/adriancable/eternal">eternal</a>) · sound: the guest's PCM ring,
+  mixed by the host and played through Web&nbsp;Audio
 </footer>
 
 <script type="module">
@@ -83,8 +89,41 @@
   const SWALLOW = new Set(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Tab',
     'ControlLeft','ControlRight','AltLeft','AltRight', ...Array.from({length:12},(_,i)=>'F'+(i+1))]);
 
+  // The IWAD the engine plays. This is id Software's freely redistributable
+  // shareware WAD, served with CORS headers by the Internet Archive. Own DOOM,
+  // The Ultimate DOOM, DOOM II or Final DOOM? Host that WAD yourself and point
+  // this at it — the engine reads its lump directory and tells DOOM which game
+  // it is (doom.wad / doomu.wad / doom2.wad).
+  const WAD_URL = 'https://archive.org/cors/doom-shareware_1996/DOOM1.WAD';
+
   let worker = null, started = false;
   const down = new Set();
+
+  // Sound effects: the VM's PCM sound card hands blocks of stereo frames to the
+  // page, which queues them back to back on the AudioContext clock.
+  let audioCtx = null, audioAt = 0;
+  // Created from the click that starts the demo, never before: a context made
+  // outside a user gesture stays suspended, and a suspended context's clock does
+  // not advance — blocks scheduled into it would all pile up and play late. So
+  // until it is running, blocks are dropped.
+  function ensureAudio() {
+    if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); audioAt = 0; }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  }
+  function playPcm(pcm, rate) {
+    ensureAudio();                       // retries resume() once the page has a gesture
+    if (audioCtx.state !== 'running') return;
+    const frames = pcm.length >> 1;
+    if (!frames) return;
+    const buf = audioCtx.createBuffer(2, frames, rate);
+    const l = buf.getChannelData(0), r = buf.getChannelData(1);
+    for (let i = 0; i < frames; i++) { l[i] = pcm[2*i] / 32768; r[i] = pcm[2*i+1] / 32768; }
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf; src.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    if (audioAt < now + 0.02 || audioAt > now + 0.5) audioAt = now + 0.08;   // resync on drift
+    src.start(audioAt); audioAt += buf.duration;
+  }
 
   function start() {
     if (started) return; started = true;
@@ -94,16 +133,19 @@
     worker.onmessage = (e) => {
       const m = e.data;
       if (m.type === 'status') {
-        msg.textContent = ({ 'loading-engine':'loading engine…', 'loading-image':'loading Linux + DOOM…',
-          'booting':'booting Eternal Linux…', 'running':'running', 'halted':'engine halted' })[m.phase] || m.phase;
+        msg.textContent = ({ 'loading-engine':'loading engine…', 'loading-wad':'loading WAD…',
+          'loading-image':'loading Linux + DOOM…', 'booting':'booting Eternal Linux…',
+          'running':'running', 'halted':'engine halted' })[m.phase] || m.phase;
         if (m.phase === 'running') { overlay.hidden = true; hint.hidden = false; frame.focus(); }
-      } else if (m.type === 'error') { spin.style.display='none'; msg.textContent = '⚠ ' + m.message; }
+      } else if (m.type === 'pcm') { playPcm(m.pcm, m.rate); }
+      else if (m.type === 'wad') { (m.ok ? console.info : console.warn)('vaadoom: ' + (m.ok ? `WAD ${m.bytes} bytes -> ${m.name}` : m.message)); }
+      else if (m.type === 'error') { spin.style.display='none'; msg.textContent = '⚠ ' + m.message; }
     };
     worker.onerror = (e) => { spin.style.display='none'; msg.textContent = '⚠ ' + (e.message||e.type); };
-    worker.postMessage({ type:'start', canvas: off }, [off]);
+    worker.postMessage({ type:'start', canvas: off, config: { wadUrl: WAD_URL, sound: true } }, [off]);
   }
 
-  frame.addEventListener('pointerdown', () => { start(); frame.focus(); });
+  frame.addEventListener('pointerdown', () => { start(); ensureAudio(); frame.focus(); });
   frame.addEventListener('keydown', (e) => {
     const hid = KEYMAP[e.code]; if (!hid) return;
     if (SWALLOW.has(e.code)) e.preventDefault();

@@ -20,6 +20,8 @@ class VaadoomViewport extends LitElement {
     return {
       autostart: { type: Boolean },
       playable: { type: Boolean },
+      wadUrl: { type: String },
+      sound: { type: Boolean },
       _phase: { state: true },
       _error: { state: true },
       _focused: { state: true },
@@ -91,12 +93,16 @@ class VaadoomViewport extends LitElement {
     super();
     this.autostart = true;
     this.playable = true;
+    this.wadUrl = null;
+    this.sound = true;
     this._phase = 'idle';
     this._error = null;
     this._focused = false;
     this._worker = null;
     this._started = false;
     this._down = new Set();          // currently-pressed codes (for repeat suppression)
+    this._audioCtx = null;           // created on the first SFX block (see _playPcm)
+    this._audioAt = 0;               // scheduling cursor, in AudioContext time
     this._onKeyDown = this._onKeyDown.bind(this);
     this._onKeyUp = this._onKeyUp.bind(this);
   }
@@ -121,6 +127,7 @@ class VaadoomViewport extends LitElement {
     switch (this._phase) {
       case 'idle': return 'ready';
       case 'loading-engine': return 'loading engine…';
+      case 'loading-wad': return 'loading WAD…';
       case 'loading-image': return 'loading Linux + DOOM image…';
       case 'booting': return 'booting Eternal Linux…';
       case 'running': return 'running';
@@ -136,7 +143,7 @@ class VaadoomViewport extends LitElement {
       this.addEventListener('keyup', this._onKeyUp);
       this.addEventListener('focus', () => (this._focused = true));
       this.addEventListener('blur', () => { this._focused = false; this._releaseAll(); });
-      this.addEventListener('pointerdown', () => this.focus());
+      this.addEventListener('pointerdown', () => { this.focus(); this._ensureAudio(); });
     }
     if (this.autostart) this.start();
   }
@@ -144,6 +151,7 @@ class VaadoomViewport extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this._worker) { this._worker.terminate(); this._worker = null; }
+    if (this._audioCtx) { this._audioCtx.close().catch(() => {}); this._audioCtx = null; }
   }
 
   _onKeyDown(e) {
@@ -173,6 +181,55 @@ class VaadoomViewport extends LitElement {
 
   _sendKey(code) {
     if (this._worker) this._worker.postMessage({ type: 'key', code });
+  }
+
+  /* Play one block of SFX frames (interleaved S16 stereo) drained from the guest's
+   * PCM ring. Blocks are queued back-to-back on the AudioContext clock; if the
+   * emulator falls behind and the queue runs dry we resync with a small lead so a
+   * hiccup costs one gap instead of permanent drift.
+   *
+   * Blocks that arrive before the context is running are DROPPED, not queued: a
+   * suspended context's currentTime does not advance, so scheduling into it would
+   * pile up every block produced during the ~15s boot and play them all — minutes
+   * behind — once the first click resumes it. Sound therefore starts at the moment
+   * the user interacts with the page, which is also the only moment browsers allow. */
+  _playPcm(pcm, rate) {
+    if (!this.sound) return;
+    const ctx = this._ensureAudio();          // also retries resume() after a gesture
+    if (!ctx || ctx.state !== 'running') return;
+    const frames = pcm.length >> 1;
+    if (!frames) return;
+    const buf = ctx.createBuffer(2, frames, rate);
+    const left = buf.getChannelData(0), right = buf.getChannelData(1);
+    for (let i = 0; i < frames; i++) {
+      left[i] = pcm[2 * i] / 32768;
+      right[i] = pcm[2 * i + 1] / 32768;
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    const now = ctx.currentTime;
+    // Resync when the queue has run dry (emulator fell behind) or drifted too far
+    // ahead (it ran faster than real time); otherwise keep blocks seamless.
+    if (this._audioAt < now + 0.02 || this._audioAt > now + 0.5) this._audioAt = now + 0.08;
+    src.start(this._audioAt);
+    this._audioAt += buf.duration;
+  }
+
+  /* Creates the AudioContext and keeps trying to resume it. Browsers start it
+   * suspended until the page has seen a user gesture, which is why this is called
+   * both from the click that starts play and from every arriving SFX block —
+   * whichever comes first wins, and sound recovers on its own afterwards. */
+  _ensureAudio() {
+    if (!this.sound) return null;
+    if (!this._audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      this._audioCtx = new Ctx();
+      this._audioAt = 0;
+    }
+    if (this._audioCtx.state === 'suspended') this._audioCtx.resume().catch(() => {});
+    return this._audioCtx;
   }
 
   /** Boots the engine. Safe to call once; ignored if already started. */
@@ -206,6 +263,15 @@ class VaadoomViewport extends LitElement {
       if (m.type === 'status') {
         this._phase = m.phase;
         if (m.phase === 'running' && this.playable) this.focus();  // grab keyboard when DOOM starts
+      } else if (m.type === 'pcm') {
+        this._playPcm(m.pcm, m.rate);
+      } else if (m.type === 'stats') {
+        this._stats = m;   // engine counters; handy when debugging a WAD or sound
+      } else if (m.type === 'wad') {
+        // Non-fatal: without a usable WAD the guest falls back to the bundled one.
+        this._wad = m;
+        if (m.ok) console.info(`vaadoom: WAD loaded (${m.bytes} bytes, served to DOOM as ${m.name})`);
+        else console.warn('vaadoom: ' + m.message);
       } else if (m.type === 'error') {
         this._error = m.message;
       }
@@ -214,7 +280,9 @@ class VaadoomViewport extends LitElement {
       this._error = 'Engine worker error: ' + (ev.message || ev.type);
     };
 
-    worker.postMessage({ type: 'start', canvas: offscreen }, [offscreen]);
+    worker.postMessage(
+      { type: 'start', canvas: offscreen, config: { wadUrl: this.wadUrl, sound: this.sound } },
+      [offscreen]);
   }
 }
 

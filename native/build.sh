@@ -2,6 +2,7 @@
 # Build the lunatix SUBLEQ VM. Two targets from ONE source (vm.c):
 #   ./build.sh wasm     (default) -> WebAssembly module for the Vaadin add-on
 #   ./build.sh native             -> native SDL3 binary (the unchanged upstream build)
+#   ./build.sh test               -> node self-test of the zero-page devices
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -40,6 +41,25 @@ if [ "$TARGET" = "native" ] || [ "$TARGET" = "native-nommu" ]; then
   exit 0
 fi
 
+if [ "$TARGET" = "test" ]; then
+  # Device self-test: a small-memory wasm build driven by a hand-written subleq
+  # program (test/test-devices.mjs) that exercises the host-file registers and
+  # proves the devices stay inert until em_dev_enable() is called.
+  : "${EMSDK:=$HOME/emsdk}"
+  # shellcheck disable=SC1091
+  source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1 || true
+  TMP="$(mktemp -d)"
+  emcc -O1 -fwrapv -DMEM_WORDS=262144 "$WASM_SRC" -o "$TMP/testvm.js" \
+    -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node \
+    -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=1048576 \
+    -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,HEAPU8,HEAP32 \
+    -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_hf_served,_em_mem_base,_malloc,_free
+  node test/test-devices.mjs "$TMP/testvm.js"
+  rc=$?
+  rm -rf "$TMP"
+  exit $rc
+fi
+
 # ---- wasm (default) --------------------------------------------------------
 : "${EMSDK:=$HOME/emsdk}"
 # shellcheck disable=SC1091
@@ -55,8 +75,8 @@ emcc -O3 -fwrapv "$WASM_SRC" -o "$OUT/vaadoom.js" \
   -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
   -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2147483648 \
   -sSTACK_SIZE=1048576 \
-  -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall \
-  -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push
+  -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,HEAPU8,HEAP32 \
+  -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_hf_served,_em_mem_base,_malloc,_free
 
 echo ">> done."
 ls -la "$OUT"/vaadoom.js "$OUT"/vaadoom.wasm

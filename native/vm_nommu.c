@@ -12,6 +12,7 @@
  * ---------------------------------------------------------------------------*/
 #ifdef __EMSCRIPTEN__
 #  include "em_backend.h"
+#  include "em_devices.h"
 #else
 #  include <SDL3/SDL.h>
 #endif
@@ -94,12 +95,31 @@ static uint64_t run(uint64_t max_steps) {
             unsigned char ch = (unsigned char) mem[a];
             write(1, &ch, 1);
 #endif                                          /* (dropped in the browser; fbcon shows it) */
+#ifdef __EMSCRIPTEN__
+        } else if (dev_flags                   /* zero-page device write (sound / host file) */
+                   && (uint32_t) (b - MMIO_DEV_LO) <= (uint32_t) (MMIO_DEV_HI - MMIO_DEV_LO)
+                   && dev_write(mem, MEM_WORDS, b, mem[a])) {
+            /* register written; the store is dropped and no branch is taken, exactly like
+             * the control-register and sound paths in lunatix's cpu.c. */
+#endif
         } else {                               /* subleq */
             if (a == 64) timespec_get((struct timespec *) &mem[64], TIME_UTC);  /* RTC */
+#ifdef __EMSCRIPTEN__
+            /* Read registers behave like the RTC: refresh the cell, then load normally. */
+            if (dev_flags && (uint32_t) (a - MMIO_RD_LO) <= (uint32_t) (MMIO_RD_HI - MMIO_RD_LO))
+                dev_read_refresh(mem, a);
+#endif
             mem[b] -= mem[a];
             if (mem[b] <= 0) pc = c;
             if (mem[0] && ++timer > 800000) {  /* timer interrupt + display refresh */
                 present();
+#ifdef __EMSCRIPTEN__
+                /* Drain the sound ring on the guest's own tick (~every 800k steps)
+                 * rather than once per slice: a slice can accumulate most of a
+                 * second of SFX, and handing that over as one block would put the
+                 * same delay between an action and the sound it makes. */
+                audio_pump(mem, MEM_WORDS);
+#endif
                 mem[1] = pc * 4;
                 pc = mem[0] / 4;
                 timer = 0;
@@ -111,8 +131,14 @@ static uint64_t run(uint64_t max_steps) {
 }
 
 #ifdef __EMSCRIPTEN__
+/* Base of the emulated RAM inside the wasm heap. Test/debug hook: it lets JS read
+ * guest memory (used by the device self-test in native/test/). */
+EMSCRIPTEN_KEEPALIVE int em_mem_base(void) { return (int) (intptr_t) mem; }
+
 EMSCRIPTEN_KEEPALIVE int em_run_slice(int max_steps) {
-    return (int) run((uint64_t) max_steps);
+    int n = (int) run((uint64_t) max_steps);
+    audio_pump(mem, MEM_WORDS);   /* catch whatever the last tick left in the ring */
+    return n;
 }
 #endif
 

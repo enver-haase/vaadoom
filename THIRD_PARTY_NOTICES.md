@@ -8,7 +8,9 @@ Vaadoom's own code (the Flow component, `native/vm.c`, `em_backend.h`, the
 The add-on additionally **bundles and redistributes** third-party works: the
 SUBLEQ virtual machine is derived from Adrian Cable's *cable* / *eternal*, and
 the boot image `vmlinux.bootimage.gz` contains a complete Linux system (kernel,
-C library, BusyBox) plus the DOOM engine and the DOOM shareware data. Their
+C library, BusyBox) plus the DOOM engine and the DOOM shareware data. That image
+is **built from modified sources** (a sound driver, a host-file driver and DOOM
+sound backends were added — see the offer at the end), not taken from upstream. Their
 licenses and the corresponding-source offer are below. Full GPL/LGPL texts are
 shipped under `META-INF/licenses/` in the JAR (and `src/main/resources/META-INF/licenses/`
 in the source tree).
@@ -65,7 +67,9 @@ SOFTWARE.
 
 The boot image runs **fbdoom** (<https://github.com/stoffera/fbdoom>), a
 framebuffer port of id Software's DOOM engine, as packaged in
-`adriancable/eternal` under `doom/src`. The engine source carries:
+`adriancable/eternal` under `doom/src` and **modified** there to add sound
+output (`device/i_snd_sound.c` writing SFX to `/dev/dsp`, `device/i_snd_music.c`
+driving `/dev/opl`). The engine source carries:
 
 > Copyright (C) 1993-1996 by id Software, Inc.
 
@@ -85,9 +89,12 @@ game content is © id Software. DOOM is a trademark of id Software LLC.
 
 ## 4. Linux kernel — `arch/subleq` port (GPLv2)
 
-The bundled kernel is Linux with the SUBLEQ architecture port, GPLv2. Source:
-<https://github.com/adriancable/linux> (submodule of `adriancable/eternal`).
-See `META-INF/licenses/GPL-2.0.txt`.
+The bundled kernel is Linux with the SUBLEQ architecture port, GPLv2, **with
+modifications**: `drivers/char/subleq_sound.c` (the OPL3 + PCM sound card),
+`drivers/char/subleq_wad.c` (the host-file device backing `/dev/wad`) and the
+matching MMIO helpers under `arch/subleq/kernel/`. Upstream source:
+<https://github.com/adriancable/linux> (submodule of `adriancable/eternal`); the
+modified source is offered below. See `META-INF/licenses/GPL-2.0.txt`.
 
 ## 5. BusyBox (GPLv2)
 
@@ -105,12 +112,18 @@ See `META-INF/licenses/LGPL-2.1.txt`.
 
 ## Written offer for corresponding source
 
-For the GPLv2/LGPLv2.1 works redistributed in `vmlinux.bootimage.gz` (the Linux
-kernel, BusyBox, uClibc-ng and the DOOM/fbdoom engine), the complete
-corresponding source is publicly available at the repositories linked above
-(the `adriancable/eternal` project and its submodules). In addition, for three
-years from distribution, the maintainer will provide the corresponding source
-on request — contact **enver@vaadin.com**.
+The shipped `vmlinux.bootimage.gz` is **not** an upstream build: it is produced
+from *modified* GPLv2/LGPLv2.1 sources — the Linux kernel gained the
+`subleq_sound` and `subleq_wad` drivers, and fbdoom gained its sound backends.
 
-The boot image is produced from those sources with
-`tools/make_boot_image.py`; see the `eternal` project for the exact build.
+The complete corresponding source for everything in that image (the modified
+Linux kernel, the modified DOOM/fbdoom engine, BusyBox and uClibc-ng) is
+published at <https://github.com/enver-haase/eternal> and its submodules
+(<https://github.com/enver-haase/linux>), which in turn track the upstream
+`adriancable/*` repositories linked above. In addition, for three years from
+distribution, the maintainer will provide the corresponding source on request —
+contact **enver@vaadin.com**.
+
+The image is built from those sources with `build-arch.sh cable-nommu`
+(`WITH_SOUND=1`), which ends in `tools/make_boot_image.py`; see the `eternal`
+project for the exact build.
