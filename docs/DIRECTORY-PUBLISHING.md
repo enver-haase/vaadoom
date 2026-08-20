@@ -25,6 +25,32 @@ gaps between what the official docs / Vaadin MCP say and what the Directory UI a
 8. To unpublish: open the component from **My components**, untick **Published**, **Save**. It moves
    to **My unpublished components** and drops off the public directory.
 
+## Publishing a NEW VERSION of an existing component (verified 2026-08-20, v1.1.0)
+
+Different entry point from the first publish, and simpler — but with its own trap:
+
+1. **My components** → click the component → **Versions** tab.
+2. **Upload new version** → **Upload File...** → pick the ZIP. The dialog closes and the editor
+   jumps straight to the new version's form, with **Framework, Maturity and License pre-filled
+   from the previous version** (unlike the first publish, where License and Framework are empty).
+   The version number comes from `Implementation-Version` in the manifest.
+3. Fill **Release notes** — the only genuinely empty required field.
+4. **Save**. The version appears in the table as *Published to Maven*.
+
+**Release notes are silently truncated at 1024 characters.** No counter, no warning, no validation
+error: the text is simply cut mid-word, and what you get back on the next edit is the truncated
+value. Keep release notes under ~1000 characters, and re-open the version afterwards to confirm the
+stored text still ends where you meant it to. (The component **Description** on the other tab holds
+65000 and the **Summary** 8192, so the cap is specific to release notes.)
+
+**A Save does not always take.** Editing the field a second time and pressing Save within the same
+view silently kept the old value; navigating away, re-opening **Edit** on the version, retyping and
+saving persisted it. Always verify by re-opening the editor — not by looking at the public page.
+
+**The public component page is cached.** `/directory/component/<artifactId>` kept serving the
+previous description and release notes for minutes after a successful save (a cache-busting query
+parameter did not help). The editor's stored values are the authority.
+
 ## The ZIP the Directory expects (produced by `-Pdirectory`)
 
 ```
