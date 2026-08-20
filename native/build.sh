@@ -49,11 +49,11 @@ if [ "$TARGET" = "test" ]; then
   # shellcheck disable=SC1091
   source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1 || true
   TMP="$(mktemp -d)"
-  emcc -O1 -fwrapv -DMEM_WORDS=262144 "$WASM_SRC" -o "$TMP/testvm.js" \
+  emcc -O1 -fwrapv -DMEM_WORDS=262144 "$WASM_SRC" opl_shim.c third_party/nuked/opl3.c -o "$TMP/testvm.js" \
     -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node \
     -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=1048576 \
     -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,HEAPU8,HEAP32 \
-    -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_hf_served,_em_mem_base,_malloc,_free
+    -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_opl_trace_enable,_em_hf_served,_em_mem_base,_malloc,_free
   node test/test-devices.mjs "$TMP/testvm.js"
   rc=$?
   rm -rf "$TMP"
@@ -69,14 +69,14 @@ OUT="../src/main/resources/META-INF/resources/vaadoom"
 mkdir -p "$OUT"
 
 echo ">> wasm build ($WASM_SRC) -> $OUT/vaadoom.{js,wasm}"
-emcc -O3 -fwrapv "$WASM_SRC" -o "$OUT/vaadoom.js" \
+emcc -O3 -fwrapv "$WASM_SRC" opl_shim.c third_party/nuked/opl3.c -o "$OUT/vaadoom.js" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 \
   -sENVIRONMENT=web,worker,node \
   -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 \
   -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2147483648 \
   -sSTACK_SIZE=1048576 \
   -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,HEAPU8,HEAP32 \
-  -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_hf_served,_em_mem_base,_malloc,_free
+  -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_opl_trace_enable,_em_hf_served,_em_mem_base,_malloc,_free
 
 echo ">> done."
 ls -la "$OUT"/vaadoom.js "$OUT"/vaadoom.wasm

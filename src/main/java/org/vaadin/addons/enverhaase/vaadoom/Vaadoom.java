@@ -161,4 +161,26 @@ public class Vaadoom extends Component implements HasSize {
     public boolean isSound() {
         return getElement().getProperty("sound", true);
     }
+
+    /**
+     * Playback gain applied to the OPL3 music stream, defaulting to {@code 0.4}.
+     * <p>
+     * Music plays continuously where sound effects are sparse, so at equal gain it
+     * dominates: measured on the shareware WAD, the effects average
+     * &minus;38&nbsp;dBFS against the music's &minus;28.5&nbsp;dBFS. The default
+     * attenuates the music to sit under them. Both streams then pass a limiter just
+     * below full scale, so raising this cannot make the mix clip &mdash; only louder.
+     *
+     * @param gain linear gain for the music stream ({@code 1} = as the chip emits it)
+     */
+    public void setMusicGain(double gain) {
+        getElement().setProperty("musicGain", gain);
+    }
+
+    /**
+     * @return the playback gain applied to the music stream
+     */
+    public double getMusicGain() {
+        return getElement().getProperty("musicGain", 0.4d);
+    }
 }

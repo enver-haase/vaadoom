@@ -55,6 +55,11 @@ onmessage = async (e) => {
     catch (err) { postMessage({ type: 'error', message: String(err && err.stack || err) }); }
   } else if (msg.type === 'key' && Module) {
     Module._em_kbd_push(msg.code | 0);
+  } else if (msg.type === 'opltrace' && Module) {
+    // Diagnostic: mirror the guest's OPL register writes so they can be inspected.
+    if (msg.on) { globalThis.__vdOplLog = []; Module._em_opl_trace_enable(1); }
+    else { Module._em_opl_trace_enable(0); }
+    if (msg.dump) postMessage({ type: 'opltrace', log: (globalThis.__vdOplLog || []).slice(0, msg.dump) });
   }
 };
 
@@ -63,8 +68,11 @@ async function boot() {
   Module = await Factory();
 
   /* The page plays what the sound card produces; a Worker cannot open an
-   * AudioContext, so hand each drained block over as a transferable. */
+   * AudioContext, so hand each block over as a transferable. Two streams, as the
+   * hardware has them: sound effects at the guest's PCM rate, and the OPL3 music
+   * at the chip's native 49716 Hz. The page just plays both. */
   globalThis.__vdAudio = (pcm, rate) => postMessage({ type: 'pcm', pcm, rate }, [pcm.buffer]);
+  globalThis.__vdAudioOpl = (pcm, rate) => postMessage({ type: 'opl', pcm, rate }, [pcm.buffer]);
 
   const wad = config.wadUrl ? await fetchWad(config.wadUrl) : null;
 
@@ -180,8 +188,8 @@ function tick() {
   }
   if (++slices % STATS_EVERY === 0) {
     // How much of the WAD the guest has actually pulled through the host-file
-    // device, and whether it is driving the OPL chip (music is not synthesized
-    // yet). Useful to see that the fetched WAD really is the one being played.
+    // device, and how many OPL registers it has poked. Useful to see that the
+    // fetched WAD really is the one being played, and that music is running.
     postMessage({ type: 'stats', wadBytesServed: Module._em_hf_served(),
                   oplWrites: Module._em_opl_writes(), steps: totalSteps });
   }

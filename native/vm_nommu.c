@@ -88,6 +88,12 @@ static uint64_t run(uint64_t max_steps) {
         if (max_steps && n >= max_steps) break;
         a = fetch(); b = fetch(); c = fetch();
         n++;
+#ifdef __EMSCRIPTEN__
+        /* Music is generated in small, frequent steps (~1.6 ms of guest time) rather
+         * than once per slice, so register writes keep their timing. The check is one
+         * masked compare on a counter already in a register. */
+        if ((n & 0xFFFF) == 0) opl_pump(0);
+#endif
         if (a == -1) {                         /* keyboard MMIO: mem[b] = next key event */
             mem[b] = kb_poll();
         } else if (b == -1) {                  /* serial console byte */
@@ -138,6 +144,7 @@ EMSCRIPTEN_KEEPALIVE int em_mem_base(void) { return (int) (intptr_t) mem; }
 EMSCRIPTEN_KEEPALIVE int em_run_slice(int max_steps) {
     int n = (int) run((uint64_t) max_steps);
     audio_pump(mem, MEM_WORDS);   /* catch whatever the last tick left in the ring */
+    opl_pump(1);                  /* and flush the tail of the music block */
     return n;
 }
 #endif
@@ -182,6 +189,7 @@ int main(int argc, char **argv) {
 
 #ifdef __EMSCRIPTEN__
     em_video_init(FB_WIDTH, FB_HEIGHT);
+    dev_reset();                               /* a fresh machine starts silent */
     pc = 0;
     return 0;                                  /* JS drives execution via em_run_slice() */
 #else

@@ -1,8 +1,8 @@
 # Third-party notices
 
-Vaadoom's own code (the Flow component, `native/vm.c`, `em_backend.h`, the
-`vaadoom-viewport.js` / `vaadoom-worker.js` glue and the compiled
-`vaadoom.js` / `vaadoom.wasm`) is licensed under the MIT License — see
+Vaadoom's own code (the Flow component, `native/vm.c`, `em_backend.h`,
+`em_devices.h`, the `vaadoom-viewport.js` / `vaadoom-worker.js` glue and the
+compiled `vaadoom.js` / `vaadoom.wasm`) is licensed under the MIT License — see
 [LICENSE](LICENSE).
 
 The add-on additionally **bundles and redistributes** third-party works: the
@@ -87,6 +87,25 @@ property of id Software. It is redistributed unmodified under id Software's
 long-standing permission to freely distribute the DOOM shareware. All DOOM
 game content is © id Software. DOOM is a trademark of id Software LLC.
 
+## 3a. Nuked-OPL3 — the FM synthesizer (LGPLv2.1-or-later)
+
+DOOM's music is played by emulating the Yamaha OPL3 (the AdLib/SoundBlaster FM
+chip) on the host side: the guest only writes chip registers, exactly as DOS DOOM
+wrote them to real hardware. The emulator is **Nuked-OPL3** by Alexey Khokholov
+(nukeykt), <https://github.com/nukeykt/Nuked-OPL3>, version 1.8, vendored
+**unmodified** under `native/third_party/nuked/` and used under the **GNU Lesser
+General Public License, version 2.1 or later** — see
+`native/third_party/nuked/LICENSE` and `META-INF/licenses/LGPL-2.1.txt`.
+
+It is linked into the compiled `vaadoom.wasm` that ships in the JAR. The LGPL's
+relinking requirement is met by construction: Nuked-OPL3 is kept as a separate
+translation unit behind the three-function interface in `native/opl_shim.h`, and
+the complete sources of the engine plus the script that builds it
+(`native/build.sh wasm`, needing only emsdk) are distributed with this project,
+so the library can be modified or replaced and the engine rebuilt. Replacing it
+with a differently-licensed core (ymfm, Opal) means replacing `native/opl_shim.c`
+and the vendored directory; nothing else refers to it.
+
 ## 4. Linux kernel — `arch/subleq` port (GPLv2)
 
 The bundled kernel is Linux with the SUBLEQ architecture port, GPLv2, **with
@@ -117,7 +136,8 @@ from *modified* GPLv2/LGPLv2.1 sources — the Linux kernel gained the
 `subleq_sound` and `subleq_wad` drivers, and fbdoom gained its sound backends.
 
 The complete corresponding source for everything in that image (the modified
-Linux kernel, the modified DOOM/fbdoom engine, BusyBox and uClibc-ng) is
+Linux kernel, the modified DOOM/fbdoom engine — including its OPL music and PCM
+sound backends — BusyBox and uClibc-ng) is
 published at <https://github.com/enver-haase/eternal> and its submodules
 (<https://github.com/enver-haase/linux>), which in turn track the upstream
 `adriancable/*` repositories linked above. In addition, for three years from

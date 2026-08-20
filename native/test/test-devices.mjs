@@ -32,11 +32,12 @@ const alloc = (bytes) => { const p = M._malloc(bytes.length); M.HEAPU8.set(bytes
 function image(build) {
   const img = new Int32Array(2048);
   let pc = 0;
+  const here = () => pc * 4;          // byte address of the next instruction written
   const ins = (a, b, c) => {
     const next = (pc + 3) * 4;
     img[pc++] = a * 4; img[pc++] = b * 4; img[pc++] = (c === undefined ? next : c);
   };
-  build(ins, img);
+  build(ins, img, here);
   return img;
 }
 
@@ -141,6 +142,88 @@ const soundProgram = image((ins, img) => {
   got = null;
   M._em_run_slice(100);
   check('sound: drained ring produces nothing', got, null);
+}
+
+/* ------------------------------------------------------- OPL3 music ------ */
+
+/* The guest programs one 2-op FM voice and keys a note on, writing packed
+ * (reg << 8) | val words to MMIO_OPL exactly as the kernel's /dev/opl does. The
+ * host runs Nuked-OPL3 and must hand the page a non-silent 49716 Hz stream. The
+ * program then spins forever, so slices keep running and the wall-clock-driven
+ * generator has time to produce audio (which is the whole point: generation has
+ * to track real time for the register stamping to mean anything). */
+const OPL_PATCH = [
+  [0x105, 0x01],                                              // OPL3 mode
+  [0x20, 0x01], [0x40, 0x1A], [0x60, 0xF2], [0x80, 0x25],     // modulator
+  [0x23, 0x01], [0x43, 0x00], [0x63, 0xF2], [0x83, 0x15],     // carrier
+  [0xC0, 0x3E],                                               // L+R, feedback, FM
+  [0xA0, 0x98], [0xB0, 0x31],                                 // note, key-on
+];
+
+{
+  const ZERO = 501;
+  boot(image((ins, img, here) => {
+    OPL_PATCH.forEach(([reg, val], i) => {
+      img[220 + i] = (reg << 8) | val;
+      ins(220 + i, PCM.OPL);
+    });
+    img[ZERO] = 0;
+    ins(ZERO, ZERO, here());     // spin here forever: 0 -= 0 always branches to itself
+  }));
+
+  const blocks = [];
+  globalThis.__vdAudioOpl = (pcm, rate) => blocks.push({ frames: pcm.length / 2, rate,
+    peak: pcm.reduce((m, v) => Math.max(m, Math.abs(v)), 0) });
+  M._em_dev_enable(DEV_SOUND);
+
+  for (let i = 0; i < 8; i++) {                 // let real time pass between slices
+    M._em_run_slice(50_000);
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  M._em_run_slice(50_000);
+
+  const frames = blocks.reduce((a, b) => a + b.frames, 0);
+  const peak = blocks.reduce((m, b) => Math.max(m, b.peak), 0);
+  check('opl: register writes reached the chip', M._em_opl_writes(), OPL_PATCH.length);
+  check('opl: music was generated', frames > 4000, true);
+  check('opl: at the OPL3 native rate', blocks.length ? blocks[0].rate : 0, 49716);
+  check('opl: the note is audible (non-silent)', peak > 1000, true);
+  console.log(`      (${blocks.length} blocks, ${frames} frames, peak ${peak})`);
+}
+
+/* A scheduled write must land where the guest asked, not where it arrived. The
+ * guest keys a note "200 ms from now"; nothing may sound before that, and it
+ * must be sounding shortly after. This is the contract that keeps the score's
+ * timing intact even though the guest's render loop runs at ~7 Hz. */
+{
+  const ZERO = 501, SCHED_MS = 200;
+  const sched = (reg, val) => ((SCHED_MS << 17) | ((reg & 0x1FF) << 8) | (val & 0xFF));
+  boot(image((ins, img, here) => {
+    OPL_PATCH.forEach(([reg, val], i) => {         // patch now, note in the future
+      const last = i >= OPL_PATCH.length - 2;      // 0xA0 / 0xB0 = the note itself
+      img[220 + i] = last ? sched(reg, val) : ((reg << 8) | val);
+      ins(220 + i, PCM.OPL);
+    });
+    img[ZERO] = 0;
+    ins(ZERO, ZERO, here());
+  }));
+
+  const timeline = [];
+  globalThis.__vdAudioOpl = (pcm, rate) => timeline.push(
+    pcm.reduce((m, v) => Math.max(m, Math.abs(v)), 0));
+  M._em_dev_enable(DEV_SOUND);
+
+  const start = Date.now();
+  let firstSoundMs = null, framesBefore = 0;
+  for (let i = 0; i < 14; i++) {
+    M._em_run_slice(50_000);
+    await new Promise((r) => setTimeout(r, 40));
+    if (firstSoundMs === null && timeline.some((p) => p > 500)) firstSoundMs = Date.now() - start;
+  }
+  check('opl: a scheduled note stays silent until its time',
+        firstSoundMs === null || firstSoundMs >= SCHED_MS * 0.8, true);
+  check('opl: and does sound afterwards', timeline.some((p) => p > 500), true);
+  console.log(`      (first sound at ${firstSoundMs} ms, scheduled for ${SCHED_MS} ms)`);
 }
 
 console.log(failures ? `\n${failures} FAILED` : '\nRESULT devices ... PASS');

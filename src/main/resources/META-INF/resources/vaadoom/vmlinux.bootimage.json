@@ -1,9 +1,10 @@
 {
-  "comment": "Capabilities of the boot image shipped next to this file. The worker reads it so a new image can announce what it supports without an API change.",
+  "comment": "Capabilities of the boot image shipped next to this file. The worker reads it so a new image can announce what it supports without an API change. oplScheduling: the guest stamps OPL writes with the moment they belong to (top 15 bits of the /dev/opl word).",
   "selfLaunch": true,
   "sound": true,
   "hostFile": true,
-  "built": "2026-08-20",
+  "built": "2026-08-21",
   "source": "enver-haase/eternal, arch cable-nommu (WITH_SOUND=1) + drivers/char/subleq_wad.c",
-  "guest": "NOMMU Linux 6.19 (subleq) + BusyBox + fbdoom with /dev/dsp SFX, /dev/opl music and /dev/wad host WAD"
+  "guest": "NOMMU Linux 6.19 (subleq) + BusyBox + fbdoom with /dev/dsp SFX, time-stamped /dev/opl music and /dev/wad host WAD",
+  "oplScheduling": true
 }

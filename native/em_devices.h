@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "opl_shim.h"
 
 /* ------------------------------------------------------------------ registers */
 /* Sound card (identical to lunatix / the guest's subleq_sound driver). */
@@ -59,7 +60,9 @@
 /* ---------------------------------------------------------------------- state */
 #define PCM_RATE_DEFAULT 11025          /* DOOM's SFX rate; the guest overrides it */
 #define AUDIO_PCM_MAX    8192           /* max frames handed to JS per pump        */
-#define AUDIO_PUMP_STEPS 65536          /* drain the ring this often (in steps)    */
+#define OPL_RATE         49716          /* OPL3's native emit rate (Hz)            */
+#define OPL_MAX_CATCHUP  4096           /* cap one generate() burst (~82 ms)       */
+#define OPL_BLOCK_FRAMES 2048           /* hand music to JS in blocks of this size */
 
 static int      dev_flags;              /* DEV_* bits; 0 = every device inert */
 
@@ -71,6 +74,32 @@ static struct {
     int32_t  rate;                      /* sample rate in Hz                      */
     uint32_t opl_writes;                /* OPL register writes seen (music: TODO) */
 } pcm = { 0, 0, 0, 0, PCM_RATE_DEFAULT, 0 };
+
+/* Music. The guest writes OPL3 registers (its music player translates MUS/MIDI to
+ * register pokes, paced off the RTC) and we run the chip here, exactly like a DOS
+ * DOOM driving an AdLib. Generation is WALL-CLOCK proportional and happens often —
+ * that is what keeps the timing right: Nuked stamps each buffered register write
+ * against the generation sample counter, so a write lands where the guest issued it
+ * only if generation tracks real time. Generating one big block per VM slice would
+ * quantize every note onto the slice boundary, which is what a 140 Hz score sounds
+ * like when it is sampled at 13 Hz: mush. */
+static struct {
+    int      touched;                   /* the guest has driven the chip at least once */
+    double   last_ms;                   /* wall clock at the last generate()           */
+    int16_t  buf[OPL_BLOCK_FRAMES * 2]; /* accumulates frames until a block is full    */
+    int      have;                      /* frames currently in buf                     */
+    uint64_t generated;                 /* total frames generated since the chip reset */
+} opl;
+
+/* Writes the guest scheduled for a moment that has not been rendered yet. The
+ * guest runs its sequencer ahead of real time and stamps each write with how far
+ * in the future it belongs (the top 15 bits of the MMIO word, in milliseconds);
+ * we hold it here and apply it at exactly that sample. Without this the guest's
+ * render loop — about 7 iterations a second on this machine — would decide when
+ * every note starts, smearing a score written on a 250 ms grid by +-100 ms. */
+#define OPL_SCHED_MAX 1024
+static struct { uint64_t at; uint16_t reg; uint8_t val; } opl_sched[OPL_SCHED_MAX];
+static int opl_sched_head, opl_sched_count;
 
 static struct {
     uint8_t *data;  uint32_t size;      /* stream 0: the WAD itself     */
@@ -89,9 +118,44 @@ EM_JS(void, em_audio_push, (const int16_t *ptr, int frames, int rate), {
   globalThis.__vdAudio(pcm, rate);
 });
 
+/* Music goes to the page as its own stream at the OPL's native rate; the page mixes
+ * the two by simply playing both (SDL did the same with two audio streams). Keeping
+ * them separate avoids resampling 49716 Hz down to the SFX rate in here. */
+EM_JS(void, em_audio_push_opl, (const int16_t *ptr, int frames, int rate), {
+  if (!globalThis.__vdAudioOpl) return;
+  var pcm = HEAP16.slice(ptr >> 1, (ptr >> 1) + frames * 2);
+  globalThis.__vdAudioOpl(pcm, rate);
+});
+
+/* Diagnostic: mirror every OPL register write to JS with its wall-clock time, so the
+ * guest's music stream can be inspected (is it keying notes at all? how often? on
+ * which channels?). Off by default and free when off. */
+EM_JS(void, em_opl_trace, (int reg, int val, double t, int dt), {
+  if (globalThis.__vdOplLog) globalThis.__vdOplLog.push([Math.round(t), reg, val, dt]);
+});
+
+static int opl_tracing;
+
+/* Booting a machine must leave the devices as quiet as a cold one: no note still
+ * keyed from a previous run, no half-finished transfer, no ring armed at an
+ * address that means nothing to the new image. Called from main(). */
+static void dev_reset(void) {
+    pcm.base = pcm.frames = 0;
+    pcm.write = pcm.read = 0;
+    pcm.rate = PCM_RATE_DEFAULT;
+    opl.touched = 0;
+    opl.have = 0;
+    opl.generated = 0;
+    opl_sched_head = opl_sched_count = 0;
+    hf.sel = hf.dest = hf.off = hf.done = 0;
+}
+
 /* ------------------------------------------------------------------ interface */
 /* JS: Module._em_dev_enable(flags) — turns the optional devices on. */
 EMSCRIPTEN_KEEPALIVE void em_dev_enable(int flags) { dev_flags = flags; }
+
+/* JS: Module._em_opl_trace_enable(1) — start mirroring OPL writes (diagnostic). */
+EMSCRIPTEN_KEEPALIVE void em_opl_trace_enable(int on) { opl_tracing = on; }
 
 /* JS: Module._em_hf_set(dataPtr, dataLen, namePtr, nameLen) — publishes the WAD.
  * The buffers are malloc'd on the JS side and owned by the engine afterwards. */
@@ -156,7 +220,31 @@ static inline int dev_write(int32_t *mem, int32_t mem_words, int32_t reg, int32_
             break;
     }
     switch (reg) {
-        case MMIO_OPL:        pcm.opl_writes++;               break;  /* FM synth: TODO */
+        case MMIO_OPL:
+            pcm.opl_writes++;
+            if (!opl.touched) {                      /* first write: start the chip */
+                opl.touched = 1;
+                opl.last_ms = emscripten_get_now();
+                opl.generated = 0;
+                opl_sched_head = opl_sched_count = 0;
+                opl_reset(OPL_RATE);
+            }
+            {
+                uint16_t reg = (uint16_t) ((v >> 8) & 0x1FF);
+                uint8_t  val = (uint8_t) (v & 0xFF);
+                uint32_t dt_ms = ((uint32_t) v >> 17) & 0x7FFF;   /* 0 = right now */
+                if (opl_tracing) em_opl_trace(reg, val, emscripten_get_now(), (int) dt_ms);
+                if (dt_ms == 0 || opl_sched_count >= OPL_SCHED_MAX) {
+                    opl_write_buffered(reg, val);
+                } else {
+                    int i = (opl_sched_head + opl_sched_count) % OPL_SCHED_MAX;
+                    opl_sched[i].at  = opl.generated + (uint64_t) dt_ms * OPL_RATE / 1000;
+                    opl_sched[i].reg = reg;
+                    opl_sched[i].val = val;
+                    opl_sched_count++;
+                }
+            }
+            break;
         case MMIO_PCM_BASE:   pcm.base   = v;                 break;
         case MMIO_PCM_FRAMES: pcm.frames = v;                 break;
         case MMIO_PCM_WRITE:  pcm.write  = (uint32_t) v;      break;
@@ -175,6 +263,53 @@ static inline void dev_read_refresh(int32_t *mem, int32_t reg) {
     if (!(dev_flags & DEV_HOSTFILE)) return;
     if (reg == MMIO_HF_SIZE) { uint32_t n; hf_stream(&n); mem[reg] = (int32_t) n; }
     else                     { mem[reg] = hf.done; }
+}
+
+/* Generate as much music as real time has advanced since the last call, and hand it
+ * to JS in fixed blocks. Called often (see vm_nommu.c) so that Nuked's write stamping
+ * has fine-grained positions to land on; the catch-up is capped so that a stalled tab
+ * cannot synthesize a huge burst on its next tick. Silent — and free — until the guest
+ * first drives the chip. */
+static void opl_pump(int flush) {
+    if (!(dev_flags & DEV_SOUND) || !opl.touched) return;
+
+    double now = emscripten_get_now();
+    double dms = now - opl.last_ms;
+    if (dms < 0) dms = 0;
+    opl.last_ms = now;
+
+    uint32_t want = (uint32_t) (dms * OPL_RATE / 1000.0);
+    if (want > OPL_MAX_CATCHUP) want = OPL_MAX_CATCHUP;
+
+    while (want) {
+        /* Apply everything the guest scheduled for a sample we have reached. */
+        while (opl_sched_count && opl_sched[opl_sched_head].at <= opl.generated) {
+            opl_write_buffered(opl_sched[opl_sched_head].reg, opl_sched[opl_sched_head].val);
+            opl_sched_head = (opl_sched_head + 1) % OPL_SCHED_MAX;
+            opl_sched_count--;
+        }
+        /* Render no further than the next scheduled write, so it lands on time. */
+        uint32_t seg = want;
+        if (opl_sched_count) {
+            uint64_t until = opl_sched[opl_sched_head].at - opl.generated;
+            if (until < seg) seg = (uint32_t) until;
+        }
+        if (!seg) continue;                     /* a write is due right now */
+        int room = OPL_BLOCK_FRAMES - opl.have;
+        int n = (int) (seg < (uint32_t) room ? seg : (uint32_t) room);
+        opl_generate(&opl.buf[opl.have * 2], n);
+        opl.have += n;
+        opl.generated += (uint64_t) n;
+        want -= (uint32_t) n;
+        if (opl.have == OPL_BLOCK_FRAMES) {
+            em_audio_push_opl(opl.buf, opl.have, OPL_RATE);
+            opl.have = 0;
+        }
+    }
+    if (flush && opl.have) {                 /* end of slice: do not sit on a part block */
+        em_audio_push_opl(opl.buf, opl.have, OPL_RATE);
+        opl.have = 0;
+    }
 }
 
 /* Drain the guest's PCM ring (one stereo frame per word: lo16 = L, hi16 = R) and

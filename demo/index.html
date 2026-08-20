@@ -99,18 +99,22 @@
   let worker = null, started = false;
   const down = new Set();
 
-  // Sound effects: the VM's PCM sound card hands blocks of stereo frames to the
-  // page, which queues them back to back on the AudioContext clock.
-  let audioCtx = null, audioAt = 0;
+  // Sound: the VM hands the page two streams of stereo frames — sound effects
+  // from the guest's PCM ring, and OPL3 music rendered host-side at 49716 Hz.
+  // Each keeps its own cursor on the AudioContext clock; playing both mixes them.
+  let audioCtx = null, audioAt = { sfx: 0, music: 0 }, musicGain = null, master = null;
+  // Music plays continuously where effects are sparse, so it is attenuated to sit
+  // under them; a limiter on the master keeps a coincidence of peaks from clipping.
+  const MUSIC_GAIN = 0.4;
   // Created from the click that starts the demo, never before: a context made
   // outside a user gesture stays suspended, and a suspended context's clock does
   // not advance — blocks scheduled into it would all pile up and play late. So
   // until it is running, blocks are dropped.
   function ensureAudio() {
-    if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); audioAt = 0; }
+    if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); audioAt = { sfx: 0, music: 0 }; }
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   }
-  function playPcm(pcm, rate) {
+  function playBlock(stream, pcm, rate) {
     ensureAudio();                       // retries resume() once the page has a gesture
     if (audioCtx.state !== 'running') return;
     const frames = pcm.length >> 1;
@@ -119,10 +123,20 @@
     const l = buf.getChannelData(0), r = buf.getChannelData(1);
     for (let i = 0; i < frames; i++) { l[i] = pcm[2*i] / 32768; r[i] = pcm[2*i+1] / 32768; }
     const src = audioCtx.createBufferSource();
-    src.buffer = buf; src.connect(audioCtx.destination);
+    src.buffer = buf;
+    if (!master) {
+      master = audioCtx.createDynamicsCompressor();
+      master.threshold.value = -3; master.knee.value = 0; master.ratio.value = 20;
+      master.attack.value = 0.003; master.release.value = 0.25;
+      master.connect(audioCtx.destination);
+    }
+    if (stream === 'music') {
+      if (!musicGain) { musicGain = audioCtx.createGain(); musicGain.gain.value = MUSIC_GAIN; musicGain.connect(master); }
+      src.connect(musicGain);
+    } else src.connect(master);
     const now = audioCtx.currentTime;
-    if (audioAt < now + 0.02 || audioAt > now + 0.5) audioAt = now + 0.08;   // resync on drift
-    src.start(audioAt); audioAt += buf.duration;
+    if (audioAt[stream] < now + 0.02 || audioAt[stream] > now + 0.5) audioAt[stream] = now + 0.08;
+    src.start(audioAt[stream]); audioAt[stream] += buf.duration;
   }
 
   function start() {
@@ -137,7 +151,8 @@
           'loading-image':'loading Linux + DOOM…', 'booting':'booting Eternal Linux…',
           'running':'running', 'halted':'engine halted' })[m.phase] || m.phase;
         if (m.phase === 'running') { overlay.hidden = true; hint.hidden = false; frame.focus(); }
-      } else if (m.type === 'pcm') { playPcm(m.pcm, m.rate); }
+      } else if (m.type === 'pcm') { playBlock('sfx', m.pcm, m.rate); }
+      else if (m.type === 'opl') { playBlock('music', m.pcm, m.rate); }
       else if (m.type === 'wad') { (m.ok ? console.info : console.warn)('vaadoom: ' + (m.ok ? `WAD ${m.bytes} bytes -> ${m.name}` : m.message)); }
       else if (m.type === 'error') { spin.style.display='none'; msg.textContent = '⚠ ' + m.message; }
     };

@@ -53,11 +53,21 @@ pass its URL — serving it from your own Vaadin application needs no CORS setup
 cross-origin URL must send `Access-Control-Allow-Origin`. Those IWADs are not freely
 redistributable, so this project links only to the shareware one.
 
-**Sound.** DOOM's sound effects are audible. The guest writes PCM frames into a ring in
-its own RAM and rings an MMIO doorbell; the engine drains that ring on the VM's timer tick
-and the page plays the blocks through the Web Audio API (~150 ms behind the action). The
-guest also drives an OPL3 register port for music — the host does not synthesize those
-registers yet, so music is still silent. Turn SFX off with `doom.setSound(false)`.
+**Sound and music.** Both are audible. Sound effects: the guest writes PCM frames into a
+ring in its own RAM and rings an MMIO doorbell; the engine drains that ring on the VM's
+timer tick and the page plays the blocks through the Web Audio API (~150 ms behind the
+action). Music: the guest translates the WAD's MUS score to **OPL3** register writes — the
+same thing DOS DOOM did to an AdLib card — and the engine runs the chip (Nuked-OPL3) at
+its native 49716 Hz.
+
+Keeping music *in time* takes one more trick. This machine renders about seven frames a
+second, so if the guest simply wrote registers as its loop came around, every note in a
+140 ms window would land at whichever moment that loop flushed it, and a score written on
+a 250 ms grid would come out with ±100 ms of jitter. Instead the guest runs its sequencer
+**ahead** of real time and stamps each write with the moment it belongs to (15 spare bits
+of the `/dev/opl` word); the engine holds the write and applies it at exactly that sample.
+Music is quiet by nature — one FM voice peaks around −18 dBFS — so the page applies a gain,
+adjustable via `doom.setMusicGain(double)`. Turn all sound off with `doom.setSound(false)`.
 
 **Playable.** When the component has focus it forwards keyboard input to DOOM —
 **arrows** move, **Ctrl** fires, **Space** uses/opens, **Alt** strafes, **1–7** pick weapons,
@@ -84,7 +94,7 @@ headers. Disable input via `doom.setPlayable(false)` for a render-only attract l
 <dependency>
     <groupId>org.vaadin.addons.enverhaase</groupId>
     <artifactId>vaadoom</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -123,8 +133,9 @@ same source builds both the browser engine and the original native SDL3 binary.
 
 ## Credits & license
 
-Vaadoom's own code is **MIT** licensed ([LICENSE](LICENSE)). The SUBLEQ VM is derived
-from Adrian Cable's IOCCC 2025 *cable* entry and the
+Vaadoom's own code is **MIT** licensed ([LICENSE](LICENSE)). The FM synthesizer is
+Nuked-OPL3 (LGPLv2.1, vendored unmodified under `native/third_party/nuked/`). The SUBLEQ
+VM is derived from Adrian Cable's IOCCC 2025 *cable* entry and the
 [`eternal`](https://github.com/adriancable/eternal) project (MIT). The bundled boot image
 redistributes the DOOM/**fbdoom** engine and id Software's shareware `doom1.wad`
 (© id Software), plus the Linux kernel and BusyBox (GPLv2) and uClibc-ng (LGPLv2.1) —
