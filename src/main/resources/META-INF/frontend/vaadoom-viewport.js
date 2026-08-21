@@ -96,7 +96,7 @@ class VaadoomViewport extends LitElement {
     this.playable = true;
     this.wadUrl = null;
     this.sound = true;
-    this.musicGain = 0.4;
+    this.musicGain = 0.6;
     this._phase = 'idle';
     this._error = null;
     this._focused = false;

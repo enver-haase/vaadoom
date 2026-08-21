@@ -105,7 +105,7 @@
   let audioCtx = null, audioAt = { sfx: 0, music: 0 }, musicGain = null, master = null;
   // Music plays continuously where effects are sparse, so it is attenuated to sit
   // under them; a limiter on the master keeps a coincidence of peaks from clipping.
-  const MUSIC_GAIN = 0.4;
+  const MUSIC_GAIN = 0.6;
   // Created from the click that starts the demo, never before: a context made
   // outside a user gesture stays suspended, and a suspended context's clock does
   // not advance — blocks scheduled into it would all pile up and play late. So

@@ -53,7 +53,7 @@ if [ "$TARGET" = "test" ]; then
     -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node \
     -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=1048576 \
     -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,HEAPU8,HEAP32 \
-    -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_opl_trace_enable,_em_hf_served,_em_mem_base,_malloc,_free
+    -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_opl_trace_enable,_em_opl_overflows,_em_hf_served,_em_mem_base,_malloc,_free
   node test/test-devices.mjs "$TMP/testvm.js"
   rc=$?
   rm -rf "$TMP"
@@ -76,7 +76,7 @@ emcc -O3 -fwrapv "$WASM_SRC" opl_shim.c third_party/nuked/opl3.c -o "$OUT/vaadoo
   -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2147483648 \
   -sSTACK_SIZE=1048576 \
   -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,HEAPU8,HEAP32 \
-  -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_opl_trace_enable,_em_hf_served,_em_mem_base,_malloc,_free
+  -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_opl_trace_enable,_em_opl_overflows,_em_hf_served,_em_mem_base,_malloc,_free
 
 echo ">> done."
 ls -la "$OUT"/vaadoom.js "$OUT"/vaadoom.wasm

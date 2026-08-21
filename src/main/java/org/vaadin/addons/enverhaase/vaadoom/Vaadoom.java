@@ -163,7 +163,7 @@ public class Vaadoom extends Component implements HasSize {
     }
 
     /**
-     * Playback gain applied to the OPL3 music stream, defaulting to {@code 0.4}.
+     * Playback gain applied to the OPL3 music stream, defaulting to {@code 0.6}.
      * <p>
      * Music plays continuously where sound effects are sparse, so at equal gain it
      * dominates: measured on the shareware WAD, the effects average
@@ -181,6 +181,6 @@ public class Vaadoom extends Component implements HasSize {
      * @return the playback gain applied to the music stream
      */
     public double getMusicGain() {
-        return getElement().getProperty("musicGain", 0.4d);
+        return getElement().getProperty("musicGain", 0.6d);
     }
 }

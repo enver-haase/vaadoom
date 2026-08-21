@@ -32,7 +32,7 @@
 
 /* ------------------------------------------------------------------ registers */
 /* Sound card (identical to lunatix / the guest's subleq_sound driver). */
-#define MMIO_OPL        67   /* W: packed (reg<<8)|val -> OPL3 (music; not synthesized yet) */
+#define MMIO_OPL        67   /* W: packed (dt_ms<<17)|(reg<<8)|val -> OPL3 (see below)  */
 #define MMIO_PCM_BASE   68   /* W: word index of the guest PCM ring in M (0 = disabled)     */
 #define MMIO_PCM_FRAMES 69   /* W: ring capacity in stereo frames                           */
 #define MMIO_PCM_WRITE  70   /* W: producer counter — total stereo frames enqueued          */
@@ -97,9 +97,23 @@ static struct {
  * we hold it here and apply it at exactly that sample. Without this the guest's
  * render loop — about 7 iterations a second on this machine — would decide when
  * every note starts, smearing a score written on a 250 ms grid by +-100 ms. */
-#define OPL_SCHED_MAX 1024
+/* Register 0x1FF does not exist on the chip; the guest writes it to mean "drop
+ * everything still queued", which it needs when it stops or changes a song —
+ * otherwise the tail of the old one, already scheduled up to a second ahead,
+ * would play over the new one. */
+#define OPL_CMD_FLUSH 0x1FF
+/* Capacity of the scheduled-write queue. The guest schedules MUS_LOOKAHEAD_MS of
+ * music ahead of real time, so this has to hold everything a score can emit in
+ * that window: E1M1 peaks near 330 register writes a second, and with a three
+ * second lookahead that is roughly 1000 — measured 1651 at its densest. The old
+ * 1024 overflowed there, and the overflow path applied those writes IMMEDIATELY
+ * instead of at their time, so notes fired early and out of order. That is what
+ * "the music falls apart in the busy parts" was. Sized with room to spare; 8192
+ * entries is 128 KB. */
+#define OPL_SCHED_MAX 8192
 static struct { uint64_t at; uint16_t reg; uint8_t val; } opl_sched[OPL_SCHED_MAX];
 static int opl_sched_head, opl_sched_count;
+static uint32_t opl_overflows;      /* scheduled writes we had to apply early */
 
 static struct {
     uint8_t *data;  uint32_t size;      /* stream 0: the WAD itself     */
@@ -147,6 +161,7 @@ static void dev_reset(void) {
     opl.have = 0;
     opl.generated = 0;
     opl_sched_head = opl_sched_count = 0;
+    opl_overflows = 0;
     hf.sel = hf.dest = hf.off = hf.done = 0;
 }
 
@@ -175,6 +190,11 @@ EMSCRIPTEN_KEEPALIVE int em_hf_served(void) { return (int) hf.served; }
 /* JS: Module._em_opl_writes() — how many OPL register writes the guest has made.
  * Lets the worker report "music is being driven" while FM synthesis is still TODO. */
 EMSCRIPTEN_KEEPALIVE int em_opl_writes(void) { return (int) pcm.opl_writes; }
+
+/* JS: Module._em_opl_overflows() — how many scheduled writes had to be applied
+ * immediately because the queue was full. Anything above zero means the music's
+ * timing was corrupted, so it is worth watching rather than guessing at. */
+EMSCRIPTEN_KEEPALIVE int em_opl_overflows(void) { return (int) opl_overflows; }
 
 /* -------------------------------------------------------------- host-file I/O */
 static const uint8_t *hf_stream(uint32_t *len_out) {
@@ -234,7 +254,12 @@ static inline int dev_write(int32_t *mem, int32_t mem_words, int32_t reg, int32_
                 uint8_t  val = (uint8_t) (v & 0xFF);
                 uint32_t dt_ms = ((uint32_t) v >> 17) & 0x7FFF;   /* 0 = right now */
                 if (opl_tracing) em_opl_trace(reg, val, emscripten_get_now(), (int) dt_ms);
+                if (reg == OPL_CMD_FLUSH) {          /* not a register: drop the queue */
+                    opl_sched_head = opl_sched_count = 0;
+                    break;
+                }
                 if (dt_ms == 0 || opl_sched_count >= OPL_SCHED_MAX) {
+                    if (dt_ms != 0) opl_overflows++;   /* timing lost: see em_opl_overflows */
                     opl_write_buffered(reg, val);
                 } else {
                     int i = (opl_sched_head + opl_sched_count) % OPL_SCHED_MAX;
