@@ -106,7 +106,10 @@ class VaadoomViewport extends LitElement {
     this._audioCtx = null;           // created on the first block (see _playBlock)
     this._musicNode = null;          // gain stage for the music stream
     this._masterNode = null;         // master bus (limiter) both streams meet at
-    this._audioAt = { sfx: 0, music: 0 };   // per-stream cursors, in AudioContext time
+    this._audioAt = { sfx: 0, music: 0 };   // per-stream cursors (fallback path only)
+    this._audioNodes = { sfx: null, music: null };   // one worklet per stream
+    this._audioStats = {};           // last counters each worklet reported
+    this._worklet = 'none';          // none | loading | ready | failed
     this._onKeyDown = this._onKeyDown.bind(this);
     this._onKeyUp = this._onKeyUp.bind(this);
   }
@@ -213,8 +216,48 @@ class VaadoomViewport extends LitElement {
     if (!this.sound) return;
     const ctx = this._ensureAudio();          // also retries resume() after a gesture
     if (!ctx || ctx.state !== 'running') return;
+    if (!(pcm.length >> 1)) return;
+
+    /* Preferred path: hand the block to this stream's worklet, which owns the
+     * timing. See vaadoom-audio.js for why the emulator, not the sound card, has
+     * to be the clock. The buffer is transferred rather than copied. */
+    if (this._worklet === 'ready') {
+      let node = this._audioNodes[stream];
+      if (!node) node = this._audioNodes[stream] = this._makeStream(ctx, stream, rate);
+      if (stream === 'music') this._musicGainNode(ctx);   // picks up musicGain changes
+      node.port.postMessage({ pcm }, [pcm.buffer]);
+      return;
+    }
+    if (this._worklet === 'loading') return;   // dropped; sound starts a moment later
+    this._scheduleBlock(ctx, stream, pcm, rate);
+  }
+
+  /* One worklet per stream, both meeting at the same master bus as before. The
+   * rate is whatever the engine says it produced this block at. */
+  _makeStream(ctx, stream, rate) {
+    const node = new AudioWorkletNode(ctx, 'vaadoom-stream', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      /* Effects tolerate less latency than music needs cushion: a shot should not
+       * lag the trigger, while music only has to stay unbroken. */
+      processorOptions: { srcRate: rate, targetMs: stream === 'music' ? 120 : 80 },
+    });
+    node.port.onmessage = (e) => { this._audioStats[stream] = e.data; };
+    node.connect(stream === 'music' ? this._musicGainNode(ctx) : this._master(ctx));
+    return node;
+  }
+
+  /** Last counters from the audio worklets: buffer depth, the speed the emulator
+   * is actually producing sound at (1.0 = real time), and any underruns. */
+  audioStats() { return this._audioStats; }
+
+  /* Fallback for browsers without AudioWorklet: schedule each block on the
+   * AudioContext clock. This is the arrangement that produced regular dropouts
+   * whenever the emulator ran slower than real time, which it usually does — kept
+   * only because silence would be worse. */
+  _scheduleBlock(ctx, stream, pcm, rate) {
     const frames = pcm.length >> 1;
-    if (!frames) return;
     const buf = ctx.createBuffer(2, frames, rate);
     const left = buf.getChannelData(0), right = buf.getChannelData(1);
     for (let i = 0; i < frames; i++) {
@@ -281,6 +324,20 @@ class VaadoomViewport extends LitElement {
       if (!Ctx) return null;
       this._audioCtx = new Ctx();
       this._audioAt = { sfx: 0, music: 0 };
+      /* Load the worklet that will own audio timing. Blocks arriving while this is
+       * in flight are dropped, which costs a fraction of a second of sound at
+       * startup and nothing afterwards. */
+      if (this._audioCtx.audioWorklet) {
+        this._worklet = 'loading';
+        const url = new URL('vaadoom/vaadoom-audio.js', document.baseURI);
+        this._audioCtx.audioWorklet.addModule(url)
+          .then(() => { this._worklet = 'ready'; })
+          .catch((e) => {
+            this._worklet = 'failed';
+            console.warn('vaadoom: audio worklet unavailable, falling back to block '
+              + 'scheduling (expect dropouts when the emulator runs behind): ' + e);
+          });
+      }
     }
     if (this._audioCtx.state === 'suspended') this._audioCtx.resume().catch(() => {});
     return this._audioCtx;
