@@ -35,7 +35,7 @@
 <header>
   <h1>VAADOOM</h1>
   <p>DOOM running in WebAssembly — a NOMMU Linux on Adrian Cable's single-instruction SUBLEQ VM,
-     <b>with sound</b>. This is a <b>standalone demo of the client engine</b>; the
+     <b>with sound effects and OPL3 music</b>. This is a <b>standalone demo of the client engine</b>; the
      <a href="https://vaadin.com/directory/component/vaadoom">Vaadin&nbsp;Directory add-on</a>
      wraps this exact engine as a server-side Flow component.
      Click the frame and play. First paint takes ~15&nbsp;seconds (it boots Linux, fetches the WAD
@@ -64,8 +64,11 @@
   100% client-side · no server, no <code>SharedArrayBuffer</code>, no COOP/COEP ·
   <a href="https://github.com/enver-haase/vaadoom">source on GitHub</a> ·
   DOOM © id Software (shareware) · MIT-licensed engine (derived from
-  <a href="https://github.com/adriancable/eternal">eternal</a>) · sound: the guest's PCM ring,
-  mixed by the host and played through Web&nbsp;Audio
+  <a href="https://github.com/adriancable/eternal">eternal</a>), with
+  <a href="https://github.com/nukeykt/Nuked-OPL3">Nuked-OPL3</a> under LGPL-2.1
+  (<a href="https://github.com/enver-haase/vaadoom/blob/master/THIRD_PARTY_NOTICES.md">notices</a>)
+  · sound: the guest's PCM ring and an emulated OPL3, buffered and resampled so that
+  playback follows the emulator's clock rather than the sound card's
 </footer>
 
 <script type="module">
@@ -99,30 +102,87 @@
   let worker = null, started = false;
   const down = new Set();
 
-  // Sound effects: the VM's PCM sound card hands blocks of stereo frames to the
-  // page, which queues them back to back on the AudioContext clock.
-  let audioCtx = null, audioAt = 0;
+  // Sound: the VM hands the page two streams of stereo frames — sound effects
+  // from the guest's PCM ring, and OPL3 music rendered host-side at 49716 Hz.
+  // Each keeps its own cursor on the AudioContext clock; playing both mixes them.
+  let audioCtx = null, audioAt = { sfx: 0, music: 0 }, musicGain = null, master = null;
+  // Timing belongs to the emulator, not to the sound card. This machine produces
+  // sound at roughly 97% of real time, so anything that consumes at exactly 100%
+  // runs dry on a regular cadence — a few small dropouts a second. vaadoom-audio.js
+  // buffers each stream and resamples out of it at whatever rate keeps the buffer
+  // level, so playback follows the emulator and never gaps. Music then plays as
+  // slowly as the guest runs, which is about a half semitone flat here.
+  let worklet = 'none', nodes = { sfx: null, music: null };
+  // Music plays continuously where effects are sparse, so it is attenuated to sit
+  // under them; a limiter on the master keeps a coincidence of peaks from clipping.
+  const MUSIC_GAIN = 0.6;
   // Created from the click that starts the demo, never before: a context made
   // outside a user gesture stays suspended, and a suspended context's clock does
   // not advance — blocks scheduled into it would all pile up and play late. So
   // until it is running, blocks are dropped.
   function ensureAudio() {
-    if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); audioAt = 0; }
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioAt = { sfx: 0, music: 0 };
+      if (audioCtx.audioWorklet) {
+        worklet = 'loading';
+        audioCtx.audioWorklet.addModule('vaadoom-audio.js')
+          .then(() => { worklet = 'ready'; })
+          .catch((e) => { worklet = 'failed'; console.warn('vaadoom: no audio worklet, expect dropouts: ' + e); });
+      }
+    }
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   }
-  function playPcm(pcm, rate) {
+
+  // The master bus both streams meet at: a limiter just below full scale, so a
+  // coincidence of peaks between music and effects cannot clip.
+  function bus() {
+    if (!master) {
+      master = audioCtx.createDynamicsCompressor();
+      master.threshold.value = -3; master.knee.value = 0; master.ratio.value = 20;
+      master.attack.value = 0.003; master.release.value = 0.25;
+      master.connect(audioCtx.destination);
+    }
+    return master;
+  }
+  function musicBus() {
+    if (!musicGain) { musicGain = audioCtx.createGain(); musicGain.gain.value = MUSIC_GAIN; musicGain.connect(bus()); }
+    return musicGain;
+  }
+  function playBlock(stream, pcm, rate) {
     ensureAudio();                       // retries resume() once the page has a gesture
     if (audioCtx.state !== 'running') return;
+    if (!(pcm.length >> 1)) return;
+
+    if (worklet === 'ready') {
+      let node = nodes[stream];
+      if (!node) {
+        node = nodes[stream] = new AudioWorkletNode(audioCtx, 'vaadoom-stream', {
+          numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
+          processorOptions: { srcRate: rate, targetMs: stream === 'music' ? 120 : 80 },
+        });
+        node.connect(stream === 'music' ? musicBus() : bus());
+      }
+      node.port.postMessage({ pcm }, [pcm.buffer]);
+      return;
+    }
+    if (worklet === 'loading') return;   // dropped; sound starts a moment later
+    scheduleBlock(stream, pcm, rate);
+  }
+
+  // Fallback for browsers without AudioWorklet: schedule blocks on the
+  // AudioContext clock, which is what dropped out when the emulator ran behind.
+  function scheduleBlock(stream, pcm, rate) {
     const frames = pcm.length >> 1;
-    if (!frames) return;
     const buf = audioCtx.createBuffer(2, frames, rate);
     const l = buf.getChannelData(0), r = buf.getChannelData(1);
     for (let i = 0; i < frames; i++) { l[i] = pcm[2*i] / 32768; r[i] = pcm[2*i+1] / 32768; }
     const src = audioCtx.createBufferSource();
-    src.buffer = buf; src.connect(audioCtx.destination);
+    src.buffer = buf;
+    src.connect(stream === 'music' ? musicBus() : bus());
     const now = audioCtx.currentTime;
-    if (audioAt < now + 0.02 || audioAt > now + 0.5) audioAt = now + 0.08;   // resync on drift
-    src.start(audioAt); audioAt += buf.duration;
+    if (audioAt[stream] < now + 0.02 || audioAt[stream] > now + 0.5) audioAt[stream] = now + 0.08;
+    src.start(audioAt[stream]); audioAt[stream] += buf.duration;
   }
 
   function start() {
@@ -137,7 +197,8 @@
           'loading-image':'loading Linux + DOOM…', 'booting':'booting Eternal Linux…',
           'running':'running', 'halted':'engine halted' })[m.phase] || m.phase;
         if (m.phase === 'running') { overlay.hidden = true; hint.hidden = false; frame.focus(); }
-      } else if (m.type === 'pcm') { playPcm(m.pcm, m.rate); }
+      } else if (m.type === 'pcm') { playBlock('sfx', m.pcm, m.rate); }
+      else if (m.type === 'opl') { playBlock('music', m.pcm, m.rate); }
       else if (m.type === 'wad') { (m.ok ? console.info : console.warn)('vaadoom: ' + (m.ok ? `WAD ${m.bytes} bytes -> ${m.name}` : m.message)); }
       else if (m.type === 'error') { spin.style.display='none'; msg.textContent = '⚠ ' + m.message; }
     };
