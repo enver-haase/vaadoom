@@ -125,6 +125,14 @@ static uint32_t opl_overflows;      /* scheduled writes we had to apply early */
  * means; chocolate's I_OPL_StopSong releases its voices the same way. */
 static uint8_t opl_keyed[18];
 
+/* Declared here because the release path below traces too; the definition (an
+ * EM_JS shim) follows further down. Off by default and free when off. */
+void em_opl_trace(int reg, int val, double t, int dt, double at);
+static int opl_tracing;
+#define OPL_TRACE(reg, val, dt, at) \
+    do { if (opl_tracing) em_opl_trace((int) (reg), (int) (val), emscripten_get_now(), \
+                                       (int) (dt), (double) (at)); } while (0)
+
 /* Last value written to each operator's 0x80 register (sustain level in the high
  * nibble, release rate in the low one), bank 0 then bank 1. Releasing a voice is
  * not enough to silence it: DOOM's GENMIDI bank contains instruments with a
@@ -165,10 +173,13 @@ static void opl_release_all(void) {
             uint8_t o  = (uint8_t) (opl_op[ch] + 3 * k);
             uint8_t sr = opl_sr[c / 9][o];
             if ((sr & 0x0F) == 0x0F) continue;         /* already the fastest release */
+            OPL_TRACE(bank | (0x80 + o), (sr & 0xF0) | 0x0F, 0, opl.generated);
             opl_apply((uint16_t) (bank | (0x80 + o)), (uint8_t) ((sr & 0xF0) | 0x0F));
+            OPL_TRACE(bank | (0x80 + o), sr, 50, opl.generated + OPL_RATE / 20);
             opl_sched_push(opl.generated + OPL_RATE / 20,   /* 50 ms: envelope is done */
                            (uint16_t) (bank | (0x80 + o)), sr);
         }
+        OPL_TRACE(bank | (0xB0 + ch), opl_keyed[c] & ~0x20, 0, opl.generated);
         opl_apply((uint16_t) (bank | (0xB0 + ch)), (uint8_t) (opl_keyed[c] & ~0x20));
     }
 }
@@ -201,12 +212,17 @@ EM_JS(void, em_audio_push_opl, (const int16_t *ptr, int frames, int rate), {
 
 /* Diagnostic: mirror every OPL register write to JS with its wall-clock time, so the
  * guest's music stream can be inspected (is it keying notes at all? how often? on
- * which channels?). Off by default and free when off. */
-EM_JS(void, em_opl_trace, (int reg, int val, double t, int dt), {
-  if (globalThis.__vdOplLog) globalThis.__vdOplLog.push([Math.round(t), reg, val, dt]);
+ * which channels?). Off by default and free when off.
+ *
+ * `at` is the sample the write is applied at — opl.generated for an immediate one,
+ * opl_sched[].at for a scheduled one — and it is what makes a trace replayable:
+ * feed the (at, reg, val) triples to test/opl-replay.c and a native build of the
+ * same opl_shim.c + Nuked-OPL3 reproduces this engine's audio sample for sample.
+ * Wall-clock time alone cannot do that, because the stream position and the wall
+ * clock drift apart by however much OPL_MAX_CATCHUP clamped. */
+EM_JS(void, em_opl_trace, (int reg, int val, double t, int dt, double at), {
+  if (globalThis.__vdOplLog) globalThis.__vdOplLog.push([Math.round(t), reg, val, dt, at]);
 });
-
-static int opl_tracing;
 
 /* Booting a machine must leave the devices as quiet as a cold one: no note still
  * keyed from a previous run, no half-finished transfer, no ring armed at an
@@ -315,14 +331,15 @@ static inline int dev_write(int32_t *mem, int32_t mem_words, int32_t reg, int32_
                 uint16_t reg = (uint16_t) ((v >> 8) & 0x1FF);
                 uint8_t  val = (uint8_t) (v & 0xFF);
                 uint32_t dt_ms = ((uint32_t) v >> 17) & 0x7FFF;   /* 0 = right now */
-                if (opl_tracing) em_opl_trace(reg, val, emscripten_get_now(), (int) dt_ms);
                 if (reg == OPL_CMD_FLUSH) {          /* not a register: drop the queue */
+                    OPL_TRACE(reg, val, dt_ms, opl.generated);
                     opl_sched_head = opl_sched_count = 0;
                     opl_release_all();                   /* the notes it was holding must not hang */
                     break;
                 }
                 if (dt_ms == 0 || opl_sched_count >= OPL_SCHED_MAX) {
                     if (dt_ms != 0) opl_overflows++;   /* timing lost: see em_opl_overflows */
+                    OPL_TRACE(reg, val, dt_ms, opl.generated);
                     opl_apply(reg, val);
                 } else {
                     int i = (opl_sched_head + opl_sched_count) % OPL_SCHED_MAX;
@@ -330,6 +347,7 @@ static inline int dev_write(int32_t *mem, int32_t mem_words, int32_t reg, int32_
                     opl_sched[i].reg = reg;
                     opl_sched[i].val = val;
                     opl_sched_count++;
+                    OPL_TRACE(reg, val, dt_ms, opl_sched[i].at);
                 }
             }
             break;

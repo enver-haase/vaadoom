@@ -23,6 +23,7 @@ native/emsdk/
 # native build artifacts
 native/lunavm
 native/lunavm-capture
+native/test/opl-replay
 
 # bundled boot image (regenerate with: ./native/build.sh image)
 src/main/resources/META-INF/resources/vaadoom/vmlinux.bootimage.gz

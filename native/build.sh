@@ -3,6 +3,7 @@
 #   ./build.sh wasm     (default) -> WebAssembly module for the Vaadin add-on
 #   ./build.sh native             -> native SDL3 binary (the unchanged upstream build)
 #   ./build.sh test               -> node self-test of the zero-page devices
+#   ./build.sh replay             -> native OPL replay harness (test/opl-replay)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -54,10 +55,22 @@ if [ "$TARGET" = "test" ]; then
     -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=1048576 \
     -sEXPORTED_RUNTIME_METHODS=callMain,FS,ccall,HEAPU8,HEAP32 \
     -sEXPORTED_FUNCTIONS=_main,_em_run_slice,_em_kbd_push,_em_dev_enable,_em_hf_set,_em_opl_writes,_em_opl_trace_enable,_em_opl_overflows,_em_hf_served,_em_mem_base,_malloc,_free
-  node test/test-devices.mjs "$TMP/testvm.js"
+  node test/test-devices.mjs "$TMP/testvm.js" && node test/test-opl-flush.mjs "$TMP/testvm.js"
   rc=$?
   rm -rf "$TMP"
   exit $rc
+fi
+
+if [ "$TARGET" = "replay" ]; then
+  # Native OPL replay harness: renders a register stream through the same
+  # opl_shim.c + Nuked-OPL3 the wasm engine uses, with no emulator and no wall
+  # clock in the way. See test/opl-replay.c for what it is good for.
+  CC="${CC:-cc}"
+  echo ">> native replay harness -> ./test/opl-replay"
+  $CC -std=gnu17 -O3 -fwrapv -I. test/opl-replay.c opl_shim.c third_party/nuked/opl3.c \
+      -o test/opl-replay
+  echo ">> done: ./native/test/opl-replay <stream.txt> <out.wav> <seconds>"
+  exit 0
 fi
 
 # ---- wasm (default) --------------------------------------------------------
