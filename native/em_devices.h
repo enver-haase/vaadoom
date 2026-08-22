@@ -115,6 +115,64 @@ static struct { uint64_t at; uint16_t reg; uint8_t val; } opl_sched[OPL_SCHED_MA
 static int opl_sched_head, opl_sched_count;
 static uint32_t opl_overflows;      /* scheduled writes we had to apply early */
 
+/* Last value written to each channel's 0xB0 register (key-on bit plus block and
+ * F-number high bits), bank 0 then bank 1. A song change reaches us as
+ * OPL_CMD_FLUSH, which drops everything the old song had scheduled — including
+ * the key-offs that would have released the notes still sounding. Those voices
+ * then ring for good, and the next note on such a channel does not even
+ * retrigger, because an OPL3 envelope needs a key-off before the next key-on.
+ * So the flush releases whatever is still keyed, which is what stopping a song
+ * means; chocolate's I_OPL_StopSong releases its voices the same way. */
+static uint8_t opl_keyed[18];
+
+/* Last value written to each operator's 0x80 register (sustain level in the high
+ * nibble, release rate in the low one), bank 0 then bank 1. Releasing a voice is
+ * not enough to silence it: DOOM's GENMIDI bank contains instruments with a
+ * release rate of 1 — D_INTRO's channel 11 carrier is one — which keep sounding
+ * for tens of seconds after the key-off. So a release forces the rate to 15 for
+ * the few milliseconds the envelope needs, then puts the instrument's own rate
+ * back, which is what a DOS player does on an all-notes-off. */
+static uint8_t opl_sr[2][0x16];
+
+/* Operator offset of each channel's modulator; the carrier sits three higher. */
+static const uint8_t opl_op[9] = { 0x00, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x10, 0x11, 0x12 };
+
+/* Every register write reaches the chip through here, so the key-on state stays
+ * current no matter whether the write was immediate or came out of the queue. */
+static void opl_apply(uint16_t reg, uint8_t val) {
+    if ((reg & 0xF0) == 0xB0 && (reg & 0x0F) <= 8)      /* 0xBD (rhythm) is not a channel */
+        opl_keyed[((reg >> 8) & 1) * 9 + (reg & 0x0F)] = val;
+    if ((reg & 0xFF) >= 0x80 && (reg & 0xFF) <= 0x95)
+        opl_sr[(reg >> 8) & 1][(reg & 0xFF) - 0x80] = val;
+    opl_write_buffered(reg, val);
+}
+
+/* Queue one write for `at`, the same path the guest's timestamped writes take. */
+static void opl_sched_push(uint64_t at, uint16_t reg, uint8_t val) {
+    if (opl_sched_count >= OPL_SCHED_MAX) return;
+    int i = (opl_sched_head + opl_sched_count) % OPL_SCHED_MAX;
+    opl_sched[i].at = at; opl_sched[i].reg = reg; opl_sched[i].val = val;
+    opl_sched_count++;
+}
+
+/* Release every voice that is still keyed, fast enough to actually go quiet. */
+static void opl_release_all(void) {
+    for (int c = 0; c < 18; c++) {
+        if (!(opl_keyed[c] & 0x20)) continue;
+        uint16_t bank = (uint16_t) ((c / 9) << 8);
+        int ch = c % 9;
+        for (int k = 0; k < 2; k++) {                  /* modulator, then carrier */
+            uint8_t o  = (uint8_t) (opl_op[ch] + 3 * k);
+            uint8_t sr = opl_sr[c / 9][o];
+            if ((sr & 0x0F) == 0x0F) continue;         /* already the fastest release */
+            opl_apply((uint16_t) (bank | (0x80 + o)), (uint8_t) ((sr & 0xF0) | 0x0F));
+            opl_sched_push(opl.generated + OPL_RATE / 20,   /* 50 ms: envelope is done */
+                           (uint16_t) (bank | (0x80 + o)), sr);
+        }
+        opl_apply((uint16_t) (bank | (0xB0 + ch)), (uint8_t) (opl_keyed[c] & ~0x20));
+    }
+}
+
 static struct {
     uint8_t *data;  uint32_t size;      /* stream 0: the WAD itself     */
     uint8_t *name;  uint32_t name_len;  /* stream 1: its file name      */
@@ -162,6 +220,8 @@ static void dev_reset(void) {
     opl.generated = 0;
     opl_sched_head = opl_sched_count = 0;
     opl_overflows = 0;
+    memset(opl_keyed, 0, sizeof opl_keyed);
+    memset(opl_sr, 0, sizeof opl_sr);
     hf.sel = hf.dest = hf.off = hf.done = 0;
 }
 
@@ -247,6 +307,8 @@ static inline int dev_write(int32_t *mem, int32_t mem_words, int32_t reg, int32_
                 opl.last_ms = emscripten_get_now();
                 opl.generated = 0;
                 opl_sched_head = opl_sched_count = 0;
+                memset(opl_keyed, 0, sizeof opl_keyed);
+                memset(opl_sr, 0, sizeof opl_sr);
                 opl_reset(OPL_RATE);
             }
             {
@@ -256,11 +318,12 @@ static inline int dev_write(int32_t *mem, int32_t mem_words, int32_t reg, int32_
                 if (opl_tracing) em_opl_trace(reg, val, emscripten_get_now(), (int) dt_ms);
                 if (reg == OPL_CMD_FLUSH) {          /* not a register: drop the queue */
                     opl_sched_head = opl_sched_count = 0;
+                    opl_release_all();                   /* the notes it was holding must not hang */
                     break;
                 }
                 if (dt_ms == 0 || opl_sched_count >= OPL_SCHED_MAX) {
                     if (dt_ms != 0) opl_overflows++;   /* timing lost: see em_opl_overflows */
-                    opl_write_buffered(reg, val);
+                    opl_apply(reg, val);
                 } else {
                     int i = (opl_sched_head + opl_sched_count) % OPL_SCHED_MAX;
                     opl_sched[i].at  = opl.generated + (uint64_t) dt_ms * OPL_RATE / 1000;
@@ -309,7 +372,7 @@ static void opl_pump(int flush) {
     while (want) {
         /* Apply everything the guest scheduled for a sample we have reached. */
         while (opl_sched_count && opl_sched[opl_sched_head].at <= opl.generated) {
-            opl_write_buffered(opl_sched[opl_sched_head].reg, opl_sched[opl_sched_head].val);
+            opl_apply(opl_sched[opl_sched_head].reg, opl_sched[opl_sched_head].val);
             opl_sched_head = (opl_sched_head + 1) % OPL_SCHED_MAX;
             opl_sched_count--;
         }
